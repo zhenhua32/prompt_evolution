@@ -41,13 +41,34 @@ cp .env.example .env
 # 例如：OPENAI_API_KEY=sk-abc123
 ```
 
+### 配置 Base URL（OpenAI 兼容接口）
+
+如果你使用 OpenAI 兼容的 API（如本地模型、第三方代理、DeepSeek 等），需要配置 `base_url`：
+
+```bash
+# 方式 1：在 .env 文件中配置（推荐）
+# 编辑 .env，添加：
+OPENAI_BASE_URL=http://localhost:8000/v1
+
+# 方式 2：CLI 参数
+prompt-evol optimize ... --base-url http://localhost:8000/v1
+
+# 方式 3：Web UI 输入框
+# 在「Base URL」输入框中填写自定义地址
+```
+
+**常见场景**：
+- **Ollama 本地模型**：`OPENAI_BASE_URL=http://localhost:11434/v1`
+- **DeepSeek API**：`OPENAI_BASE_URL=https://api.deepseek.com/v1`
+- **自定义代理**：`OPENAI_BASE_URL=https://your-proxy.com/v1`
+
 ### CLI 使用
 
 ```bash
 # 查看可用优化方法
 prompt-evol list
 
-# 运行 APE 优化
+# 运行 APE 优化（使用默认 OpenAI 地址）
 prompt-evol optimize \
   --prompt "你是一个有用的助手。" \
   --dataset examples/dataset.json \
@@ -55,6 +76,16 @@ prompt-evol optimize \
   --model openai/gpt-4o \
   --max-iters 5 \
   --num-candidates 10 \
+  -o result.json
+
+# 运行 APE 优化（使用自定义 Base URL，如 Ollama 本地模型）
+prompt-evol optimize \
+  --prompt "你是一个有用的助手。" \
+  --dataset examples/dataset.json \
+  --method ape \
+  --model openai/gpt-4o \
+  --base-url http://localhost:11434/v1 \
+  --max-iters 5 \
   -o result.json
 
 # 启动 Web UI
@@ -69,10 +100,12 @@ python -m prompt_evolution ui
 
 浏览器打开 `http://127.0.0.1:7860`，在界面中：
 1. 选择优化算法和模型
-2. 输入初始 Prompt
-3. 上传数据集（JSON 格式）
-4. 点击「开始优化」
-5. 查看最优 Prompt 和每轮迭代历史
+2. （可选）填写 Base URL（OpenAI 兼容接口自定义地址）
+3. （可选）填写 API Key
+4. 输入初始 Prompt
+5. 上传数据集（JSON 格式）
+6. 点击「开始优化」
+7. 查看最优 Prompt 和每轮迭代历史
 
 ---
 
@@ -100,7 +133,16 @@ from prompt_evolution.evaluation import Evaluator
 from prompt_evolution.evaluation.metrics import AccuracyMetric
 
 async def main():
+    # 使用默认 OpenAI 地址
     provider = LiteLLMProvider(model="openai/gpt-4o", api_key="sk-...")
+
+    # 或使用自定义 Base URL（OpenAI 兼容接口）
+    provider = LiteLLMProvider(
+        model="openai/gpt-4o",
+        api_key="sk-...",
+        api_base="http://localhost:8000/v1"
+    )
+
     evaluator = Evaluator(metrics=[AccuracyMetric()])
     optimizer = create_optimizer(
         name="ape",

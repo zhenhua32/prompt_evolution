@@ -45,6 +45,7 @@ def optimize(
     method: str = typer.Option("ape", "--method", "-m", help=f"优化方法，可选: {', '.join(list_optimizers())}"),
     model: str = typer.Option("openai/gpt-4o", "--model", help="LiteLLM 模型标识。"),
     api_key: Optional[str] = typer.Option(None, "--api-key", help="API Key（也可用环境变量）。"),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Base URL（OpenAI 兼容接口自定义地址）。"),
     max_iterations: int = typer.Option(5, "--max-iters", help="最大迭代轮数。"),
     num_candidates: int = typer.Option(10, "--num-candidates", help="每轮候选 Prompt 数（APE）。"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="结果输出 JSON 路径。"),
@@ -69,7 +70,10 @@ def optimize(
     if not key and model.startswith("openai/"):
         typer.echo("警告：未提供 API Key，请设置 OPENAI_API_KEY 环境变量或用 --api-key。", err=True)
 
-    provider = LiteLLMProvider(model=model, api_key=key)
+    # 解析 base_url：优先用命令行参数，其次用环境变量
+    api_base = base_url or os.environ.get("OPENAI_BASE_URL", "") or None
+
+    provider = LiteLLMProvider(model=model, api_key=key, api_base=api_base)
     evaluator = Evaluator(metrics=[AccuracyMetric()])
     optimizer = create_optimizer(
         name=method,
@@ -82,6 +86,8 @@ def optimize(
     initial = PromptCandidate(id="initial", instruction=initial_prompt)
 
     typer.echo(f"开始优化：方法={method}, 模型={model}, 数据集={len(data)} 条")
+    if api_base:
+        typer.echo(f"Base URL: {api_base}")
     typer.echo("正在运行，请稍候...")
 
     # 运行优化

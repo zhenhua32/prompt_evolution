@@ -56,9 +56,10 @@ def _load_history() -> List[Dict]:
 # 模型调用辅助
 # ---------------------------------------------------------------------------
 
-def _get_provider(model_name: str, api_key: str) -> LiteLLMProvider:
+def _get_provider(model_name: str, api_key: str, api_base: str = "") -> LiteLLMProvider:
     key = api_key.strip() or None
-    return LiteLLMProvider(model=model_name, api_key=key)
+    base = api_base.strip() or None
+    return LiteLLMProvider(model=model_name, api_key=key, api_base=base)
 
 
 def _load_dataset(dataset_file: Any) -> Tuple[List[Dict], str]:
@@ -103,6 +104,7 @@ async def run_optimization(
     initial_prompt: str,
     model_name: str,
     api_key: str,
+    base_url: str,
     optimizer_name: str,
     dataset_file: Any,
     num_candidates: int,
@@ -120,7 +122,7 @@ async def run_optimization(
 
     progress(0.05, desc="初始化组件...")
     try:
-        provider = _get_provider(model_name, api_key)
+        provider = _get_provider(model_name, api_key, base_url)
         evaluator = Evaluator(metrics=[AccuracyMetric(), ExactMatchMetric(), F1ScoreMetric()])
         optimizer = create_optimizer(
             name=optimizer_name,
@@ -195,6 +197,7 @@ async def run_evaluation(
     prompt_text: str,
     model_name: str,
     api_key: str,
+    base_url: str,
     dataset_file: Any,
     progress=gr.Progress(),
 ) -> Tuple[str, str]:
@@ -207,7 +210,7 @@ async def run_evaluation(
 
     progress(0.1, desc="初始化模型...")
     try:
-        provider = _get_provider(model_name, api_key)
+        provider = _get_provider(model_name, api_key, base_url)
     except Exception as exc:
         return "", f"❌ 模型初始化失败：{exc}"
 
@@ -319,6 +322,11 @@ def create_app() -> gr.Blocks:
                             label="API Key（可选，也可用 .env 文件配置）",
                             type="password",
                         )
+                        base_url_textbox = gr.Textbox(
+                            value="",
+                            label="Base URL（可选，OpenAI 兼容接口自定义地址）",
+                            placeholder="http://localhost:8000/v1  （留空使用默认地址）",
+                        )
                         num_candidates_slider = gr.Slider(
                             minimum=3, maximum=50, value=10, step=1, label="候选 Prompt 数（APE）",
                         )
@@ -371,6 +379,11 @@ def create_app() -> gr.Blocks:
                             value="",
                             label="API Key（可选）",
                             type="password",
+                        )
+                        eval_base_url_textbox = gr.Textbox(
+                            value="",
+                            label="Base URL（可选，OpenAI 兼容接口自定义地址）",
+                            placeholder="http://localhost:8000/v1  （留空使用默认地址）",
                         )
                         gr.Markdown("### Prompt")
                         eval_prompt_textbox = gr.Textbox(
@@ -433,6 +446,7 @@ def create_app() -> gr.Blocks:
                 initial_prompt_textbox,
                 model_textbox,
                 api_key_textbox,
+                base_url_textbox,
                 optimizer_dropdown,
                 dataset_file_optimize,
                 num_candidates_slider,
@@ -455,6 +469,7 @@ def create_app() -> gr.Blocks:
                 eval_prompt_textbox,
                 eval_model_textbox,
                 eval_api_key_textbox,
+                eval_base_url_textbox,
                 eval_dataset_file,
             ],
             outputs=[eval_result_markdown, eval_status_textbox],

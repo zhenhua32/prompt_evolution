@@ -6,6 +6,7 @@ LiteLLM 支持 100+ 模型，统一为 OpenAI 兼容格式调用。
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Dict, Optional
 
@@ -13,6 +14,22 @@ import litellm
 from loguru import logger
 
 from prompt_evolution.core.base import BaseModelProvider
+
+
+def _resolve_api_base(model: str, api_base: Optional[str] = None) -> Optional[str]:
+    """按优先级解析 base_url：
+    1. 显式传入的 api_base（最高优先级）
+    2. 环境变量 OPENAI_BASE_URL（当 model 以 "openai/" 开头）
+    3. 环境变量 LITELLM_API_BASE（通用）
+    4. 返回 None（使用 LiteLLM 默认）
+    """
+    if api_base:
+        return api_base
+    if model.startswith("openai/") and os.environ.get("OPENAI_BASE_URL"):
+        return os.environ["OPENAI_BASE_URL"]
+    if os.environ.get("LITELLM_API_BASE"):
+        return os.environ["LITELLM_API_BASE"]
+    return None
 
 
 class LiteLLMProvider(BaseModelProvider):
@@ -34,15 +51,24 @@ class LiteLLMProvider(BaseModelProvider):
         **kwargs: Any,
     ) -> None:
         self._model = model
-        self._api_key = api_key
-        self._api_base = api_base
-        # 可选：设置 LiteLLM 的全局配置
-        if api_key:
-            litellm.api_key = api_key
-        if api_base:
-            litellm.api_base = api_base
+        self._api_key = api_key or self._resolve_api_key(model)
+        self._api_base = _resolve_api_base(model, api_base)
         # 费用追踪
         self._total_cost: float = 0.0
+
+    @staticmethod
+    def _resolve_api_key(model: str) -> Optional[str]:
+        """按模型前缀从环境变量读取对应的 API Key。"""
+        env_map = {
+            "openai/": "OPENAI_API_KEY",
+            "anthropic/": "ANTHROPIC_API_KEY",
+            "gemini/": "GEMINI_API_KEY",
+            "deepseek/": "DEEPSEEK_API_KEY",
+        }
+        for prefix, env_var in env_map.items():
+            if model.startswith(prefix):
+                return os.environ.get(env_var) or None
+        return os.environ.get("LITELLM_API_KEY") or None
 
     # ------------------------------------------------------------------
     # 公共属性
@@ -74,14 +100,19 @@ class LiteLLMProvider(BaseModelProvider):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
+        call_kwargs: Dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if self._api_key:
+            call_kwargs["api_key"] = self._api_key
+        if self._api_base:
+            call_kwargs["api_base"] = self._api_base
+
         try:
-            response = await litellm.acompletion(
-                model=self._model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **kwargs,
-            )
+            response = await litellm.acompletion(**call_kwargs, **kwargs)
             text = response.choices[0].message.content or ""
             # 追踪费用
             if hasattr(response, "usage") and response.usage:
@@ -98,13 +129,23 @@ class LiteLLMProvider(BaseModelProvider):
     ) -> Dict[str, Any]:
         """生成文本并返回 logprobs。"""
         messages = [{"role": "user", "content": prompt}]
-        response = await litellm.acompletion(
-            model=self._model,
-            messages=messages,
-            logprobs=True,
-            top_logprobs=kwargs.get("top_logprobs", 5),
-            **{k: v for k, v in kwargs.items() if k != "top_logprobs"},
-        )
+
+        call_kwargs: Dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "logprobs": True,
+            "top_logprobs": kwargs.get("top_logprobs", 5),
+        }
+        if self._api_key:
+            call_kwargs["api_key"] = self._api_key
+        if self._api_base:
+            call_kwargs["api_base"] = self._api_base
+
+        # 移除已处理的参数
+        for k in ["top_logprobs"]:
+            kwargs.pop(k, None)
+
+        response = await litellm.acompletion(**call_kwargs, **kwargs)
         return {
             "text": response.choices[0].message.content,
             "logprobs": getattr(response.choices[0], "logprobs", None),
