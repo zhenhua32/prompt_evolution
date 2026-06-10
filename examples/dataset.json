@@ -1,0 +1,10 @@
+[
+  {"input": "1+1=？", "target": "2"},
+  {"input": "2+3=？", "target": "5"},
+  {"input": "10-4=？", "target": "6"},
+  {"input": "3*5=？", "target": "15"},
+  {"input": "20/4=？", "target": "5"},
+  {"input": "8+7=？", "target": "15"},
+  {"input": "100-33=？", "target": "67"},
+  {"input": "6*9=？", "target": "54"}
+]
