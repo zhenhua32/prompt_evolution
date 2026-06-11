@@ -6,7 +6,7 @@
 
 ## 特性
 
-- **多算法集成**：APE、OPRO、DSPy（BootstrapFewShot / MIPROv2 / COPRO / GEPA）、EvoPrompt、RLPrompt、PromptAgent（持续增加中）
+- **多算法集成**：APE、OPRO、DSPy（BootstrapFewShot / MIPROv2 / COPRO / GEPA）、PromptBreeder、EvoPrompt、SPO（持续增加中）
 - **多模型支持**：通过 [LiteLLM](https://github.com/BerriAI/litellm) 统一接入 OpenAI / Anthropic / Gemini / DeepSeek / Ollama 等 100+ 模型
 - **统一接口**：所有优化器实现同一 `BaseOptimizer` 接口，`optimize()` → `OptimizationResult`
 - **评估框架**：内置 Accuracy、ExactMatch、F1、ROUGE、BLEU 等指标，支持 LLM-as-Judge
@@ -182,8 +182,10 @@ prompt_evolution/
 │   ├── optimizers/            # 优化算法实现
 │   │   ├── ape/                # APE (Automatic Prompt Engineer)
 │   │   ├── opro/               # OPRO (Optimization by PROmpting)
-│   │   ├── dspy_wrappers/     # DSPy 优化器封装
-│   │   └── evoprompt/          # EvoPrompt (进化算法)
+│   │   ├── dspy_optimizer/     # DSPy 优化器封装
+│   │   ├── prompt_breeder/     # PromptBreeder (进化算法)
+│   │   ├── evoprompt/          # EvoPrompt (进化 Prompt 优化)
+│   │   └── spo/                # SPO (语义邻域搜索)
 │   ├── evaluation/           # 评估框架
 │   │   └── metrics/            # 评估指标（Accuracy / F1 / ROUGE / ...）
 │   └── ui/                   # Web UI (Gradio)
@@ -202,10 +204,10 @@ prompt_evolution/
 | OPRO | 🚧 开发中 | 用 LLM 作为优化器迭代优化 |
 | DSPy (BootstrapFewShot) | 🚧 开发中 | 自动生成 few-shot 示例 |
 | DSPy (MIPROv2) | 🚧 开发中 | 同时优化指令和演示 |
-| DSPy (GEPA) | 🚧 开发中 | 遗传帕累托优化 |
+| DSPy (COPRO) | 🚧 开发中 | 坐标上升优化指令与示例 |
+| PromptBreeder | 🚧 开发中 | 进化算法 + 自我繁殖 Prompt |
 | EvoPrompt | 📋 待开发 | 基于进化算法的 prompt 优化 |
-| RLPrompt | 📋 待开发 | 强化学习优化 |
-| PromptAgent | 📋 待开发 | MCTS 优化 |
+| SPO | 📋 待开发 | 语义邻域搜索优化 |
 
 ---
 
