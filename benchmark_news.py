@@ -168,6 +168,10 @@ async def main() -> None:
     parser.add_argument("--disable-thinking", action="store_true", help="关闭模型的 thinking/reasoning 输出（如 DeepSeek R1、Claude 等）")
     args = parser.parse_args()
 
+    # .env 中的 DISABLE_THINKING=true 作为默认开启（命令行 --disable-thinking 可叠加）
+    if os.environ.get("DISABLE_THINKING", "").lower() == "true":
+        args.disable_thinking = True
+
     # 加载数据
     print(f"📂 加载数据集...")
     full_train_data = load_json(TRAIN_FILE)

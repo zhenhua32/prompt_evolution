@@ -13,6 +13,9 @@ from typing import Any, Dict, Optional
 import litellm
 from loguru import logger
 
+# 自动忽略模型不支持的参数（如 thinking），避免 UnsupportedParamsError
+litellm.drop_params = True
+
 from prompt_evolution.core.base import BaseModelProvider
 
 
