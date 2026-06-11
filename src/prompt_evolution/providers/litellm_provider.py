@@ -71,14 +71,17 @@ class LiteLLMProvider(BaseModelProvider):
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        disable_thinking: bool = False,
         **kwargs: Any,
     ) -> None:
         self._api_base = _resolve_api_base(model, api_base)
         self._model = _normalize_model(model, self._api_base)
         self._api_key = api_key or self._resolve_api_key(self._model)
+        self._disable_thinking = disable_thinking
         # 费用追踪
         self._total_cost: float = 0.0
-        print(f"✅ LiteLLMProvider 初始化成功，model={self._model}, api_base={self._api_base}, api_key={'***' if self._api_key else None}")
+        think_hint = "（think 已关闭）" if disable_thinking else ""
+        print(f"✅ LiteLLMProvider 初始化成功，model={self._model}, api_base={self._api_base}, api_key={'***' if self._api_key else None} {think_hint}")
 
     @staticmethod
     def _resolve_api_key(model: str) -> Optional[str]:
@@ -134,6 +137,8 @@ class LiteLLMProvider(BaseModelProvider):
             call_kwargs["api_key"] = self._api_key
         if self._api_base:
             call_kwargs["api_base"] = self._api_base
+        if self._disable_thinking:
+            call_kwargs["thinking"] = {"type": "disabled"}
 
         try:
             response = await litellm.acompletion(**call_kwargs, **kwargs)
@@ -164,6 +169,8 @@ class LiteLLMProvider(BaseModelProvider):
             call_kwargs["api_key"] = self._api_key
         if self._api_base:
             call_kwargs["api_base"] = self._api_base
+        if self._disable_thinking:
+            call_kwargs["thinking"] = {"type": "disabled"}
 
         # 移除已处理的参数
         for k in ["top_logprobs"]:

@@ -165,6 +165,7 @@ async def main() -> None:
     parser.add_argument("--skip-baseline", action="store_true", help="跳过 baseline 评测")
     parser.add_argument("--train-samples", type=int, default=10, help="训练时使用的数据条数（默认 0 = 全部）")
     parser.add_argument("--eval-samples", type=int, default=10, help="评测时使用的数据条数（默认 100，用 0 表示全部）")
+    parser.add_argument("--disable-thinking", action="store_true", help="关闭模型的 thinking/reasoning 输出（如 DeepSeek R1、Claude 等）")
     args = parser.parse_args()
 
     # 加载数据
@@ -190,7 +191,7 @@ async def main() -> None:
     api_key = args.api_key or os.environ.get("OPENAI_API_KEY", "")
     if not api_key and args.model.startswith("openai/"):
         print("⚠️ 警告：未提供 API Key，请设置 OPENAI_API_KEY 环境变量或用 --api-key")
-    provider = LiteLLMProvider(model=args.model, api_key=api_key, api_base=args.base_url)
+    provider = LiteLLMProvider(model=args.model, api_key=api_key, api_base=args.base_url, disable_thinking=args.disable_thinking)
     print(f"   模型: {args.model}")
     if args.base_url:
         print(f"   Base URL: {args.base_url}")
