@@ -163,7 +163,7 @@ async def main() -> None:
     parser.add_argument("--max-iters", type=int, default=3, help="每个优化器最大迭代轮数")
     parser.add_argument("--num-candidates", type=int, default=8, help="每轮候选 prompt 数")
     parser.add_argument("--skip-baseline", action="store_true", help="跳过 baseline 评测")
-    parser.add_argument("--train-samples", type=int, default=20, help="训练时使用的数据条数（默认 0 = 全部）")
+    parser.add_argument("--train-samples", type=int, default=10, help="训练时使用的数据条数（默认 0 = 全部）")
     parser.add_argument("--eval-samples", type=int, default=10, help="评测时使用的数据条数（默认 100，用 0 表示全部）")
     args = parser.parse_args()
 
