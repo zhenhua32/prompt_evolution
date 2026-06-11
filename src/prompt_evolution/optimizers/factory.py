@@ -6,11 +6,17 @@ from typing import Any, Dict, Optional
 
 from prompt_evolution.core.base import BaseOptimizer, BaseEvaluator, BaseModelProvider
 from prompt_evolution.optimizers.ape import APEOptimizer
+from prompt_evolution.optimizers.dspy_optimizer import DSPyOptimizer
+from prompt_evolution.optimizers.opro import OPROOptimizer
 
 # 名称 → 优化器类的映射
 _NAME_MAP: dict[str, type[BaseOptimizer]] = {
     "ape": APEOptimizer,
     "ape-optimizer": APEOptimizer,
+    "dspy": DSPyOptimizer,
+    "dspy-optimizer": DSPyOptimizer,
+    "opro": OPROOptimizer,
+    "opro-optimizer": OPROOptimizer,
 }
 
 

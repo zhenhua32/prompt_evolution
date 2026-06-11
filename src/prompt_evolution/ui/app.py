@@ -328,7 +328,7 @@ def create_app() -> gr.Blocks:
                             placeholder="http://localhost:8000/v1  （留空使用默认地址）",
                         )
                         num_candidates_slider = gr.Slider(
-                            minimum=3, maximum=50, value=10, step=1, label="候选 Prompt 数（APE）",
+                            minimum=3, maximum=50, value=10, step=1, label="每轮候选 Prompt 数",
                         )
                         max_iters_slider = gr.Slider(
                             minimum=1, maximum=20, value=5, step=1, label="最大迭代轮数",
@@ -347,6 +347,13 @@ def create_app() -> gr.Blocks:
                             file_types=[".json"],
                         )
                         dataset_status = gr.Textbox(label="数据集状态", interactive=False)
+
+                        gr.Markdown(
+                            "**算法说明：**\n"
+                            "- **APE**：生成多候选 → 评估 → 选最优，适合快速探索\n"
+                            "- **OPRO**：用 LLM 自我迭代优化 Prompt，适合精细调优\n"
+                            "- **DSPy**：Bootstrap 采样 + LLM 提议新指令，参考 DSPy 的 COPRO 思路"
+                        )
 
                         optimize_btn = gr.Button("开始优化", elem_classes=["optimize-btn"])
 
