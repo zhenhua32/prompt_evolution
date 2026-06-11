@@ -131,14 +131,28 @@ async def main() -> None:
     parser.add_argument("--max-iters", type=int, default=3, help="每个优化器最大迭代轮数")
     parser.add_argument("--num-candidates", type=int, default=8, help="每轮候选 prompt 数")
     parser.add_argument("--skip-baseline", action="store_true", help="跳过 baseline 评测")
+    parser.add_argument("--train-samples", type=int, default=20, help="训练时使用的数据条数（默认 0 = 全部）")
+    parser.add_argument("--eval-samples", type=int, default=10, help="评测时使用的数据条数（默认 100，用 0 表示全部）")
     args = parser.parse_args()
 
     # 加载数据
     print(f"📂 加载数据集...")
-    train_data = load_json(TRAIN_FILE)
-    test_data = load_json(TEST_FILE)
-    print(f"   训练集: {len(train_data)} 条")
-    print(f"   测试集: {len(test_data)} 条")
+    full_train_data = load_json(TRAIN_FILE)
+    full_test_data = load_json(TEST_FILE)
+    full_train_count = len(full_train_data)
+    full_test_count = len(full_test_data)
+    # 截取训练样本
+    if args.train_samples and args.train_samples > 0 and args.train_samples < full_train_count:
+        train_data = full_train_data[:args.train_samples]
+    else:
+        train_data = full_train_data
+    # 截取评测样本
+    if args.eval_samples and args.eval_samples > 0 and args.eval_samples < full_test_count:
+        test_data = full_test_data[:args.eval_samples]
+    else:
+        test_data = full_test_data
+    print(f"   训练集: {len(train_data)} 条（共 {full_train_count} 条，使用 --train-samples 调整）")
+    print(f"   评测集: {len(test_data)} 条（共 {full_test_count} 条，使用 --eval-samples 调整）")
 
     # 初始化模型：API Key 来源 = 命令行 > .env 的 OPENAI_API_KEY
     api_key = args.api_key or os.environ.get("OPENAI_API_KEY", "")
