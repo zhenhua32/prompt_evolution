@@ -16,16 +16,39 @@ from loguru import logger
 from prompt_evolution.core.base import BaseModelProvider
 
 
+def _has_known_provider(model: str) -> bool:
+    """判断 LiteLLM 是否能直接识别模型 provider。"""
+    try:
+        litellm.get_llm_provider(model=model)
+        return True
+    except Exception:
+        return False
+
+
+def _should_use_openai_compatible_base(model: str) -> bool:
+    """判断模型是否应继承 OpenAI 兼容 base_url 语义。"""
+    if model.startswith("openai/"):
+        return True
+    return not _has_known_provider(model)
+
+
+def _normalize_model(model: str, api_base: Optional[str]) -> str:
+    """为 OpenAI 兼容接口补齐 LiteLLM 需要的 provider 前缀。"""
+    if not api_base or _has_known_provider(model):
+        return model
+    return f"openai/{model}"
+
+
 def _resolve_api_base(model: str, api_base: Optional[str] = None) -> Optional[str]:
     """按优先级解析 base_url：
     1. 显式传入的 api_base（最高优先级）
-    2. 环境变量 OPENAI_BASE_URL（当 model 以 "openai/" 开头）
+    2. 环境变量 OPENAI_BASE_URL（当模型使用 OpenAI 兼容接口）
     3. 环境变量 LITELLM_API_BASE（通用）
     4. 返回 None（使用 LiteLLM 默认）
     """
     if api_base:
         return api_base
-    if model.startswith("openai/") and os.environ.get("OPENAI_BASE_URL"):
+    if _should_use_openai_compatible_base(model) and os.environ.get("OPENAI_BASE_URL"):
         return os.environ["OPENAI_BASE_URL"]
     if os.environ.get("LITELLM_API_BASE"):
         return os.environ["LITELLM_API_BASE"]
@@ -50,11 +73,12 @@ class LiteLLMProvider(BaseModelProvider):
         api_base: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-        self._model = model
-        self._api_key = api_key or self._resolve_api_key(model)
         self._api_base = _resolve_api_base(model, api_base)
+        self._model = _normalize_model(model, self._api_base)
+        self._api_key = api_key or self._resolve_api_key(self._model)
         # 费用追踪
         self._total_cost: float = 0.0
+        print(f"✅ LiteLLMProvider 初始化成功，model={self._model}, api_base={self._api_base}, api_key={'***' if self._api_key else None}")
 
     @staticmethod
     def _resolve_api_key(model: str) -> Optional[str]:
