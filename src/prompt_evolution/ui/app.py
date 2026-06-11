@@ -352,7 +352,10 @@ def create_app() -> gr.Blocks:
                             "**算法说明：**\n"
                             "- **APE**：生成多候选 → 评估 → 选最优，适合快速探索\n"
                             "- **OPRO**：用 LLM 自我迭代优化 Prompt，适合精细调优\n"
-                            "- **DSPy**：Bootstrap 采样 + LLM 提议新指令，参考 DSPy 的 COPRO 思路"
+                            "- **DSPy**：Bootstrap 采样 + LLM 提议新指令，参考 DSPy 思路\n"
+                            "- **PromptBreeder**：进化算法，变异+交叉繁殖 Prompt\n"
+                            "- **EVOPrompt**：进化 Prompt 优化，结构化变异+早停，适合跳出局部最优\n"
+                            "- **SPO**：语义邻域搜索，多角度改写 Prompt，适合语义探索"
                         )
 
                         optimize_btn = gr.Button("开始优化", elem_classes=["optimize-btn"])

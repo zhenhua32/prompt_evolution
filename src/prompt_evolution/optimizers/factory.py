@@ -7,7 +7,10 @@ from typing import Any, Dict, Optional
 from prompt_evolution.core.base import BaseOptimizer, BaseEvaluator, BaseModelProvider
 from prompt_evolution.optimizers.ape import APEOptimizer
 from prompt_evolution.optimizers.dspy_optimizer import DSPyOptimizer
+from prompt_evolution.optimizers.evoprompt import EVOPromptOptimizer
 from prompt_evolution.optimizers.opro import OPROOptimizer
+from prompt_evolution.optimizers.prompt_breeder import PromptBreederOptimizer
+from prompt_evolution.optimizers.spo import SPOOptimizer
 
 # 名称 → 优化器类的映射
 _NAME_MAP: dict[str, type[BaseOptimizer]] = {
@@ -15,8 +18,14 @@ _NAME_MAP: dict[str, type[BaseOptimizer]] = {
     "ape-optimizer": APEOptimizer,
     "dspy": DSPyOptimizer,
     "dspy-optimizer": DSPyOptimizer,
+    "evoprompt": EVOPromptOptimizer,
+    "evoprompt-optimizer": EVOPromptOptimizer,
     "opro": OPROOptimizer,
     "opro-optimizer": OPROOptimizer,
+    "promptbreeder": PromptBreederOptimizer,
+    "promptbreeder-optimizer": PromptBreederOptimizer,
+    "spo": SPOOptimizer,
+    "spo-optimizer": SPOOptimizer,
 }
 
 
