@@ -123,6 +123,61 @@ python -m prompt_evolution ui
 
 ---
 
+## 新闻分类数据集（中文）
+
+项目内置了一份中文新闻分类数据集，来自清华大学新闻分类语料，共 14 个类别：
+
+> 科技、股票、体育、娱乐、时政、社会、教育、财经、家居、游戏、房产、时尚、彩票、星座
+
+文件已转换为 prompt_evolution 标准格式：
+
+```bash
+examples/ag_news_train.json   # 1400 条（每类 100 条）
+examples/ag_news_test.json    # 420 条（每类 30 条）
+```
+
+格式示例：
+
+```json
+[{"input": "上证50ETF净申购突增", "target": "财经"}]
+```
+
+### 运行评测
+
+使用 `benchmark_news.py` 一键评测基础 Prompt 和各优化器效果：
+
+```bash
+# 设置 API Key
+export OPENAI_API_KEY=sk-xxx
+
+# 运行完整评测（Baseline + 所有优化器）
+python benchmark_news.py
+
+# 只跑指定优化器
+python benchmark_news.py --methods ape opro dspy
+
+# 使用自定义模型和 Base URL
+python benchmark_news.py \
+  --model openai/gpt-4o-mini \
+  --base-url http://localhost:11434/v1
+
+# 跳过 baseline，只跑优化器
+python benchmark_news.py --skip-baseline
+```
+
+评测完成后结果保存在 `benchmark_results.json`，终端会输出对比表格：
+
+```
+方法                  Accuracy    耗时(s)
+============================================================
+baseline              0.6523      5.2
+ape                   0.7841     32.1
+opro                 0.8012     45.3
+...
+```
+
+---
+
 ## Python API
 
 ```python
