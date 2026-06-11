@@ -20,9 +20,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
+
+from dotenv import load_dotenv, find_dotenv
+
+# 自动查找项目根目录的 .env（支持从任意目录运行脚本）
+dotenv_path = find_dotenv()
+if dotenv_path:
+    load_dotenv(dotenv_path)
+else:
+    print("⚠️ 未找到 .env 文件，将只使用环境变量和命令行参数")
 
 from prompt_evolution.core.models import PromptCandidate, OptimizationResult
 from prompt_evolution.evaluation.evaluator import Evaluator
@@ -71,7 +81,7 @@ async def evaluate_prompt(
 ) -> float:
     """用给定 prompt 在数据集上计算 Accuracy（async）。"""
     evaluator = Evaluator(metrics=[AccuracyMetric()])
-    prompt_candidate = PromptCandidate(instruction=prompt_instruction)
+    prompt_candidate = PromptCandidate(id="eval", instruction=prompt_instruction)
     return await evaluator.evaluate(prompt_candidate, dataset, provider)
 
 
@@ -91,7 +101,7 @@ async def run_optimizer(
         evaluator=evaluator,
         config={"num_candidates": num_candidates},
     )
-    initial = PromptCandidate(instruction=initial_prompt)
+    initial = PromptCandidate(id="initial", instruction=initial_prompt)
     return await optimizer.optimize(
         initial_prompt=initial,
         dataset=train_data,
@@ -111,9 +121,13 @@ async def main() -> None:
         default=None,
         help=f"要评测的优化器，默认全部: {list(list_optimizers())}",
     )
-    parser.add_argument("--model", default="openai/gpt-4o-mini", help="LiteLLM 模型标识")
-    parser.add_argument("--api-key", default=None, help="API Key（或用环境变量）")
-    parser.add_argument("--base-url", default=None, help="OpenAI 兼容 Base URL")
+    # --model 默认值：命令行 > .env 的 MODEL > openai/gpt-4o-mini
+    default_model = os.environ.get("MODEL", "openai/gpt-4o-mini")
+    parser.add_argument("--model", default=default_model, help="LiteLLM 模型标识（也可用 .env 中 MODEL）")
+    parser.add_argument("--api-key", default=None, help="API Key（或用 .env 中 OPENAI_API_KEY）")
+    # --base-url 默认值：命令行 > .env 的 OPENAI_BASE_URL
+    default_base_url = os.environ.get("OPENAI_BASE_URL", None)
+    parser.add_argument("--base-url", default=default_base_url, help="OpenAI 兼容 Base URL（也可用 .env 中 OPENAI_BASE_URL）")
     parser.add_argument("--max-iters", type=int, default=3, help="每个优化器最大迭代轮数")
     parser.add_argument("--num-candidates", type=int, default=8, help="每轮候选 prompt 数")
     parser.add_argument("--skip-baseline", action="store_true", help="跳过 baseline 评测")
@@ -126,13 +140,14 @@ async def main() -> None:
     print(f"   训练集: {len(train_data)} 条")
     print(f"   测试集: {len(test_data)} 条")
 
-    # 初始化模型
-    import os
+    # 初始化模型：API Key 来源 = 命令行 > .env 的 OPENAI_API_KEY
     api_key = args.api_key or os.environ.get("OPENAI_API_KEY", "")
     if not api_key and args.model.startswith("openai/"):
         print("⚠️ 警告：未提供 API Key，请设置 OPENAI_API_KEY 环境变量或用 --api-key")
     provider = LiteLLMProvider(model=args.model, api_key=api_key, api_base=args.base_url)
     print(f"   模型: {args.model}")
+    if args.base_url:
+        print(f"   Base URL: {args.base_url}")
 
     results: list[dict[str, Any]] = []
 
