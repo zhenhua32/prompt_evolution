@@ -79,10 +79,42 @@ async def evaluate_prompt(
     prompt_instruction: str,
     dataset: list[dict[str, Any]],
 ) -> float:
-    """用给定 prompt 在数据集上计算 Accuracy（async）。"""
-    evaluator = Evaluator(metrics=[AccuracyMetric()])
-    prompt_candidate = PromptCandidate(id="eval", instruction=prompt_instruction)
-    return await evaluator.evaluate(prompt_candidate, dataset, provider)
+    """用给定 prompt 在数据集上计算 Accuracy，逐条打印预测 vs 真实值（async）。"""
+    correct = 0
+    total = len(dataset)
+    print(f"  🔍 开始评测 {total} 条数据...")
+
+    for i, item in enumerate(dataset):
+        input_text = item["input"]
+        ground_truth = str(item["target"]).strip()
+
+        # 填充 prompt 中的 {input} 占位符
+        full_prompt = prompt_instruction.replace("{input}", input_text)
+
+        # 调用模型
+        try:
+            response = await provider.generate(
+                prompt=full_prompt,
+                temperature=0.0,
+                max_tokens=512,
+            )
+            prediction = response.strip()
+        except Exception as e:
+            print(f"  [{i+1}/{total}] ⚠️ 预测失败: {e}")
+            continue
+
+        # 判断正确与否
+        is_correct = prediction == ground_truth
+        if is_correct:
+            correct += 1
+
+        # 每条都打印：预测值 vs 真实值
+        status = "✅" if is_correct else "❌"
+        print(f"  [{i+1}/{total}] {status} 预测: {prediction} | 真实: {ground_truth}")
+
+    accuracy = correct / total if total > 0 else 0
+    print(f"  📊 准确率: {accuracy:.4f} ({correct}/{total})")
+    return accuracy
 
 
 async def run_optimizer(
