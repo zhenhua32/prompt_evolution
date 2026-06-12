@@ -41,6 +41,12 @@ cp .env.example .env
 # 例如：OPENAI_API_KEY=sk-abc123
 ```
 
+如果模型支持 reasoning / thinking 输出，且你希望请求时关闭它，也可以在 .env 中增加：
+
+```bash
+DISABLE_THINKING=true
+```
+
 ### 配置 Base URL（OpenAI 兼容接口）
 
 如果你使用 OpenAI 兼容的 API（如本地模型、第三方代理、DeepSeek 等），需要配置 `base_url`：
@@ -88,6 +94,14 @@ prompt-evol optimize \
   --max-iters 5 \
   -o result.json
 
+# 运行时关闭 thinking / reasoning 输出
+prompt-evol optimize \
+  --prompt "你是一个有用的助手。" \
+  --dataset examples/dataset.json \
+  --method ape \
+  --model openrouter/poolside/laguna-m.1:free \
+  --disable-thinking
+
 # 启动 Web UI
 prompt-evol ui --port 7860
 ```
@@ -101,7 +115,8 @@ python -m prompt_evolution ui
 浏览器打开 `http://127.0.0.1:7860`，在界面中：
 1. 选择优化算法和模型
 2. （可选）填写 Base URL（OpenAI 兼容接口自定义地址）
-3. （可选）填写 API Key
+3. （可选）勾选「关闭 thinking / reasoning」
+4. （可选）填写 API Key
 4. 输入初始 Prompt
 5. 上传数据集（JSON 格式）
 6. 点击「开始优化」
@@ -195,7 +210,8 @@ async def main():
     provider = LiteLLMProvider(
         model="openai/gpt-4o",
         api_key="sk-...",
-        api_base="http://localhost:8000/v1"
+      api_base="http://localhost:8000/v1",
+      disable_thinking=True,
     )
 
     evaluator = Evaluator(metrics=[AccuracyMetric()])

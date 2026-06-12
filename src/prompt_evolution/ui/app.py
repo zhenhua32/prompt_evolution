@@ -29,6 +29,11 @@ _HISTORY_FILE = Path(".prompt_evolution_history.jsonl")
 _LAST_RESULT: Optional[Dict] = None
 
 
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def _save_history(record: Dict) -> None:
     """将一条优化记录追加到本地历史文件。"""
     record.setdefault("timestamp", time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -56,10 +61,21 @@ def _load_history() -> List[Dict]:
 # 模型调用辅助
 # ---------------------------------------------------------------------------
 
-def _get_provider(model_name: str, api_key: str, api_base: str = "") -> LiteLLMProvider:
+def _get_provider(
+    model_name: str,
+    api_key: str,
+    api_base: str = "",
+    disable_thinking: Optional[bool] = None,
+) -> LiteLLMProvider:
     key = api_key.strip() or None
     base = api_base.strip() or None
-    return LiteLLMProvider(model=model_name, api_key=key, api_base=base)
+    thinking_disabled = _env_flag("DISABLE_THINKING") if disable_thinking is None else disable_thinking
+    return LiteLLMProvider(
+        model=model_name,
+        api_key=key,
+        api_base=base,
+        disable_thinking=thinking_disabled,
+    )
 
 
 def _load_dataset(dataset_file: Any) -> Tuple[List[Dict], str]:
@@ -83,13 +99,13 @@ async def _run_prompt_on_dataset(
     """将 prompt 应用到数据集每条样本，返回模型预测列表。"""
     predictions: List[str] = []
     for item in dataset:
-        messages = [
-            {"role": "system", "content": prompt_text},
-            {"role": "user", "content": item.get("input", "")},
-        ]
         try:
-            resp = await provider.agenerate(messages=messages, temperature=0.0)
-            predictions.append(resp.choices[0].message.content.strip())
+            resp = await provider.generate(
+                prompt=item.get("input", ""),
+                system_prompt=prompt_text,
+                temperature=0.0,
+            )
+            predictions.append(resp.strip())
         except Exception as exc:
             logger.warning("预测失败: {exc}")
             predictions.append("")
@@ -105,6 +121,7 @@ async def run_optimization(
     model_name: str,
     api_key: str,
     base_url: str,
+    disable_thinking: bool,
     optimizer_name: str,
     dataset_file: Any,
     num_candidates: int,
@@ -122,7 +139,7 @@ async def run_optimization(
 
     progress(0.05, desc="初始化组件...")
     try:
-        provider = _get_provider(model_name, api_key, base_url)
+        provider = _get_provider(model_name, api_key, base_url, disable_thinking)
         evaluator = Evaluator(metrics=[AccuracyMetric(), ExactMatchMetric(), F1ScoreMetric()])
         optimizer = create_optimizer(
             name=optimizer_name,
@@ -198,6 +215,7 @@ async def run_evaluation(
     model_name: str,
     api_key: str,
     base_url: str,
+    disable_thinking: bool,
     dataset_file: Any,
     progress=gr.Progress(),
 ) -> Tuple[str, str]:
@@ -210,7 +228,7 @@ async def run_evaluation(
 
     progress(0.1, desc="初始化模型...")
     try:
-        provider = _get_provider(model_name, api_key, base_url)
+        provider = _get_provider(model_name, api_key, base_url, disable_thinking)
     except Exception as exc:
         return "", f"❌ 模型初始化失败：{exc}"
 
@@ -285,6 +303,8 @@ def view_best_prompt(history_table: str) -> Tuple[str, str]:
 def create_app() -> gr.Blocks:
     """创建 Gradio 应用。"""
 
+    default_disable_thinking = _env_flag("DISABLE_THINKING")
+
     with gr.Blocks(
         title="Prompt 迭代神器",
         theme=gr.themes.Soft(),
@@ -326,6 +346,11 @@ def create_app() -> gr.Blocks:
                             value="",
                             label="Base URL（可选，OpenAI 兼容接口自定义地址）",
                             placeholder="http://localhost:8000/v1  （留空使用默认地址）",
+                        )
+                        disable_thinking_checkbox = gr.Checkbox(
+                            value=default_disable_thinking,
+                            label="关闭 thinking / reasoning",
+                            info="适用于带思维链输出的模型；默认读取 DISABLE_THINKING。",
                         )
                         num_candidates_slider = gr.Slider(
                             minimum=3, maximum=50, value=10, step=1, label="每轮候选 Prompt 数",
@@ -395,6 +420,11 @@ def create_app() -> gr.Blocks:
                             label="Base URL（可选，OpenAI 兼容接口自定义地址）",
                             placeholder="http://localhost:8000/v1  （留空使用默认地址）",
                         )
+                        eval_disable_thinking_checkbox = gr.Checkbox(
+                            value=default_disable_thinking,
+                            label="关闭 thinking / reasoning",
+                            info="适用于带思维链输出的模型；默认读取 DISABLE_THINKING。",
+                        )
                         gr.Markdown("### Prompt")
                         eval_prompt_textbox = gr.Textbox(
                             value="你是一个有用的助手。请根据以下问题给出准确回答：",
@@ -457,6 +487,7 @@ def create_app() -> gr.Blocks:
                 model_textbox,
                 api_key_textbox,
                 base_url_textbox,
+                disable_thinking_checkbox,
                 optimizer_dropdown,
                 dataset_file_optimize,
                 num_candidates_slider,
@@ -480,6 +511,7 @@ def create_app() -> gr.Blocks:
                 eval_model_textbox,
                 eval_api_key_textbox,
                 eval_base_url_textbox,
+                eval_disable_thinking_checkbox,
                 eval_dataset_file,
             ],
             outputs=[eval_result_markdown, eval_status_textbox],

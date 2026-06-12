@@ -29,6 +29,11 @@ app = typer.Typer(
 )
 
 
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 # ---------------------------------------------------------------------------
 # 子命令：optimize
 # ---------------------------------------------------------------------------
@@ -48,6 +53,11 @@ def optimize(
     base_url: Optional[str] = typer.Option(None, "--base-url", help="Base URL（OpenAI 兼容接口自定义地址）。"),
     max_iterations: int = typer.Option(5, "--max-iters", help="最大迭代轮数。"),
     num_candidates: int = typer.Option(10, "--num-candidates", help="每轮候选 Prompt 数（APE）。"),
+    disable_thinking: Optional[bool] = typer.Option(
+        None,
+        "--disable-thinking/--enable-thinking",
+        help="关闭或开启模型的 thinking/reasoning 输出；默认读取 DISABLE_THINKING。",
+    ),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="结果输出 JSON 路径。"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -72,8 +82,15 @@ def optimize(
 
     # 解析 base_url：优先用命令行参数，其次用环境变量
     api_base = base_url or os.environ.get("OPENAI_BASE_URL", "") or None
+    if disable_thinking is None:
+        disable_thinking = _env_flag("DISABLE_THINKING")
 
-    provider = LiteLLMProvider(model=model, api_key=key, api_base=api_base)
+    provider = LiteLLMProvider(
+        model=model,
+        api_key=key,
+        api_base=api_base,
+        disable_thinking=disable_thinking,
+    )
     evaluator = Evaluator(metrics=[AccuracyMetric()])
     optimizer = create_optimizer(
         name=method,
@@ -88,6 +105,8 @@ def optimize(
     typer.echo(f"开始优化：方法={method}, 模型={model}, 数据集={len(data)} 条")
     if api_base:
         typer.echo(f"Base URL: {api_base}")
+    if disable_thinking:
+        typer.echo("Thinking: disabled")
     typer.echo("正在运行，请稍候...")
 
     # 运行优化

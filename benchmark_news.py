@@ -74,6 +74,20 @@ def save_results(results: list[dict[str, Any]]) -> None:
     print(f"\n📊 结果已保存至: {RESULTS_FILE.resolve()}")
 
 
+def enable_model_output_logging(provider: LiteLLMProvider) -> None:
+    """在 benchmark 运行期间打印每次模型的原始输出。"""
+    original_generate = provider.generate
+
+    async def wrapped_generate(*args: Any, **kwargs: Any) -> str:
+        text = await original_generate(*args, **kwargs)
+        print("\n  ====== 模型原始输出 START ======")
+        print(text if text else "<empty>")
+        print("  ====== 模型原始输出 END ======\n")
+        return text
+
+    provider.generate = wrapped_generate  # type: ignore[method-assign]
+
+
 async def evaluate_prompt(
     provider: LiteLLMProvider,
     prompt_instruction: str,
@@ -166,6 +180,7 @@ async def main() -> None:
     parser.add_argument("--train-samples", type=int, default=10, help="训练时使用的数据条数（默认 0 = 全部）")
     parser.add_argument("--eval-samples", type=int, default=10, help="评测时使用的数据条数（默认 100，用 0 表示全部）")
     parser.add_argument("--disable-thinking", action="store_true", help="关闭模型的 thinking/reasoning 输出（如 DeepSeek R1、Claude 等）")
+    parser.add_argument("--print-model-output", action="store_true", help="打印每次模型调用的原始输出，便于排查 think 或格式问题")
     args = parser.parse_args()
 
     # .env 中的 DISABLE_THINKING=true 作为默认开启（命令行 --disable-thinking 可叠加）
@@ -196,6 +211,8 @@ async def main() -> None:
     if not api_key and args.model.startswith("openai/"):
         print("⚠️ 警告：未提供 API Key，请设置 OPENAI_API_KEY 环境变量或用 --api-key")
     provider = LiteLLMProvider(model=args.model, api_key=api_key, api_base=args.base_url, disable_thinking=args.disable_thinking)
+    if args.print_model_output:
+        enable_model_output_logging(provider)
     print(f"   模型: {args.model}")
     if args.base_url:
         print(f"   Base URL: {args.base_url}")
