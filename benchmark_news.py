@@ -57,6 +57,7 @@ INITIAL_PROMPT = """你是一个新闻分类专家。请根据输入的新闻标
 类别："""
 
 RESULTS_FILE = Path("benchmark_results.json")
+LOG_FILE_DEFAULT = Path("benchmark_log.txt")
 
 
 # ---------------------------------------------------------------------------
@@ -74,24 +75,50 @@ def save_results(results: list[dict[str, Any]]) -> None:
     print(f"\n📊 结果已保存至: {RESULTS_FILE.resolve()}")
 
 
-def enable_model_output_logging(provider: LiteLLMProvider) -> None:
-    """在 benchmark 运行期间打印每次模型的原始输出。"""
+def enable_logging(provider: LiteLLMProvider, log_file: Path) -> None:
+    """包装 provider.generate()，把完整 prompt 和模型返回写入日志文件。"""
     original_generate = provider.generate
 
     async def wrapped_generate(*args: Any, **kwargs: Any) -> str:
+        # 从 kwargs 里取出 prompt（即发给模型的完整 prompt）
+        prompt_text = kwargs.get("prompt", "")
+        messages = kwargs.get("messages", None)
+
+        # 调用原始方法
         text = await original_generate(*args, **kwargs)
-        print("\n  ====== 模型原始输出 START ======")
-        print(text if text else "<empty>")
-        print("  ====== 模型原始输出 END ======\n")
+
+        # 写入日志
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"\n{'=' * 60}\n")
+            f.write(f"[{ts}] 模型调用\n")
+            f.write(f"{'=' * 60}\n")
+            # 写完整 prompt
+            f.write(f"\n--- PROMPT ---\n")
+            if messages:
+                for msg in messages:
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    f.write(f"[{role}]\n{content}\n\n")
+            else:
+                f.write(f"{prompt_text}\n")
+            # 写模型返回
+            f.write(f"--- RESPONSE ---\n")
+            f.write(f"{text if text else '<empty>'}\n")
+            f.write(f"{'=' * 60}\n\n")
+
         return text
 
     provider.generate = wrapped_generate  # type: ignore[method-assign]
+    print(f"📝 已启用模型调用日志，写入: {log_file.resolve()}")
 
 
 async def evaluate_prompt(
     provider: LiteLLMProvider,
     prompt_instruction: str,
     dataset: list[dict[str, Any]],
+    log_file: Path | None = None,
 ) -> float:
     """用给定 prompt 在数据集上计算 Accuracy，逐条打印预测 vs 真实值（async）。"""
     correct = 0
@@ -125,6 +152,20 @@ async def evaluate_prompt(
         # 每条都打印：预测值 vs 真实值
         status = "✅" if is_correct else "❌"
         print(f"  [{i+1}/{total}] {status} 预测: {prediction} | 真实: {ground_truth}")
+
+        # 写入评测明细到日志
+        if log_file:
+            from datetime import datetime
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"\n{'=' * 60}\n")
+                f.write(f"[{ts}] 评测样本 {i+1}/{total}\n")
+                f.write(f"{'=' * 60}\n")
+                f.write(f"\n--- 输入新闻 ---\n{input_text}\n")
+                f.write(f"\n--- 模型预测 ---\n{prediction}\n")
+                f.write(f"\n--- 真实类别 ---\n{ground_truth}\n")
+                f.write(f"\n--- 结果 ---\n{'正确 ✅' if is_correct else '错误 ❌'}\n")
+                f.write(f"{'=' * 60}\n\n")
 
     accuracy = correct / total if total > 0 else 0
     print(f"  📊 准确率: {accuracy:.4f} ({correct}/{total})")
@@ -180,7 +221,7 @@ async def main() -> None:
     parser.add_argument("--train-samples", type=int, default=10, help="训练时使用的数据条数（默认 0 = 全部）")
     parser.add_argument("--eval-samples", type=int, default=10, help="评测时使用的数据条数（默认 100，用 0 表示全部）")
     parser.add_argument("--disable-thinking", action="store_true", help="关闭模型的 thinking/reasoning 输出（如 DeepSeek R1、Claude 等）")
-    parser.add_argument("--print-model-output", action="store_true", help="打印每次模型调用的原始输出，便于排查 think 或格式问题")
+    parser.add_argument("--log-file", type=str, default=None, help="模型调用日志文件路径（默认不写文件，设路径则写入完整 prompt 和返回）")
     args = parser.parse_args()
 
     # .env 中的 DISABLE_THINKING=true 作为默认开启（命令行 --disable-thinking 可叠加）
@@ -211,8 +252,18 @@ async def main() -> None:
     if not api_key and args.model.startswith("openai/"):
         print("⚠️ 警告：未提供 API Key，请设置 OPENAI_API_KEY 环境变量或用 --api-key")
     provider = LiteLLMProvider(model=args.model, api_key=api_key, api_base=args.base_url, disable_thinking=args.disable_thinking)
-    if args.print_model_output:
-        enable_model_output_logging(provider)
+    # 日志文件
+    log_file = Path(args.log_file) if args.log_file else LOG_FILE_DEFAULT
+    if log_file:
+        enable_logging(provider, log_file)
+        # 写日志头
+        from datetime import datetime
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write(f"Prompt Evolution Benchmark 日志\n")
+            f.write(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"模型: {args.model}\n")
+            f.write(f"Base URL: {args.base_url or '(default)'}\n")
+            f.write(f"\n{'=' * 60}\n\n")
     print(f"   模型: {args.model}")
     if args.base_url:
         print(f"   Base URL: {args.base_url}")
@@ -225,7 +276,7 @@ async def main() -> None:
         print("📊 Baseline（初始 Prompt 直接评测）")
         print(f"{'=' * 60}")
         t0 = time.time()
-        baseline_score = await evaluate_prompt(provider, INITIAL_PROMPT, test_data)
+        baseline_score = await evaluate_prompt(provider, INITIAL_PROMPT, test_data, log_file=log_file)
         elapsed = time.time() - t0
         print(f"   Baseline Accuracy: {baseline_score:.4f}  ({elapsed:.1f}s)")
         results.append({
