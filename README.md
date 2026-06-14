@@ -178,6 +178,19 @@ python benchmark_news.py \
 
 # 跳过 baseline，只跑优化器
 python benchmark_news.py --skip-baseline
+
+# 并发请求（加速评测，默认 5）
+python benchmark_news.py --concurrency 10
+
+# 断点续评（中断后自动从 checkpoint 恢复）
+python benchmark_news.py
+# 再次运行时自动跳过已完成的样本
+
+# 禁用断点续评（每次从头开始）
+python benchmark_news.py --no-checkpoint
+
+# 指定 checkpoint 文件路径
+python benchmark_news.py --checkpoint-file my_checkpoint.json
 ```
 
 评测完成后结果保存在 `benchmark_results.json`，终端会输出对比表格：
@@ -187,6 +200,25 @@ python benchmark_news.py --skip-baseline
 ============================================================
 baseline              0.6523      5.2
 ape                   0.7841     32.1
+```
+
+### 断点续评
+
+脚本支持中断后继续运行，避免重复消耗 API 额度：
+
+- 每次评测一条样本后立即写入 `benchmark_checkpoint.json`
+- 重新运行时自动加载 checkpoint，**跳过已完成的样本**
+- 每个 method（baseline / 各优化器）独立记录进度
+- 用 `--no-checkpoint` 可禁用此功能（每次从头开始）
+- 用 `--checkpoint-file` 可自定义 checkpoint 文件路径
+
+```
+# 第一次运行（跑到一半中断了）
+python benchmark_news.py --eval-samples 100
+# 中断后，再次运行同一命令
+# 脚本会自动跳过已评测的样本，只跑剩余的
+python benchmark_news.py --eval-samples 100
+```
 opro                 0.8012     45.3
 ...
 ```
