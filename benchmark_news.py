@@ -78,6 +78,7 @@ def save_results(results: list[dict[str, Any]]) -> None:
 def enable_logging(provider: LiteLLMProvider, log_file: Path) -> None:
     """包装 provider.generate()，把完整 prompt 和模型返回写入日志文件。"""
     original_generate = provider.generate
+    log_lock = asyncio.Lock()
 
     async def wrapped_generate(*args: Any, **kwargs: Any) -> str:
         # 从 kwargs 里取出 prompt（即发给模型的完整 prompt）
@@ -87,26 +88,25 @@ def enable_logging(provider: LiteLLMProvider, log_file: Path) -> None:
         # 调用原始方法
         text = await original_generate(*args, **kwargs)
 
-        # 写入日志
+        # 写入日志（加锁，防止并发写入交错）
         from datetime import datetime
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"\n{'=' * 60}\n")
-            f.write(f"[{ts}] 模型调用\n")
-            f.write(f"{'=' * 60}\n")
-            # 写完整 prompt
-            f.write(f"\n--- PROMPT ---\n")
-            if messages:
-                for msg in messages:
-                    role = msg.get("role", "")
-                    content = msg.get("content", "")
-                    f.write(f"[{role}]\n{content}\n\n")
-            else:
-                f.write(f"{prompt_text}\n")
-            # 写模型返回
-            f.write(f"--- RESPONSE ---\n")
-            f.write(f"{text if text else '<empty>'}\n")
-            f.write(f"{'=' * 60}\n\n")
+        async with log_lock:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"\n{'=' * 60}\n")
+                f.write(f"[{ts}] 模型调用\n")
+                f.write(f"{'=' * 60}\n")
+                f.write(f"\n--- PROMPT ---\n")
+                if messages:
+                    for msg in messages:
+                        role = msg.get("role", "")
+                        content = msg.get("content", "")
+                        f.write(f"[{role}]\n{content}\n\n")
+                else:
+                    f.write(f"{prompt_text}\n")
+                f.write(f"--- RESPONSE ---\n")
+                f.write(f"{text if text else '<empty>'}\n")
+                f.write(f"{'=' * 60}\n\n")
 
         return text
 
@@ -118,57 +118,68 @@ async def evaluate_prompt(
     provider: LiteLLMProvider,
     prompt_instruction: str,
     dataset: list[dict[str, Any]],
+    concurrency: int = 5,
     log_file: Path | None = None,
 ) -> float:
-    """用给定 prompt 在数据集上计算 Accuracy，逐条打印预测 vs 真实值（async）。"""
-    correct = 0
-    total = len(dataset)
-    print(f"  🔍 开始评测 {total} 条数据...")
+    """用给定 prompt 在数据集上并发计算 Accuracy。
 
-    for i, item in enumerate(dataset):
+    并发控制：asyncio.Semaphore 限制同时发出的请求数。
+    日志写入：asyncio.Lock 保证文件写入安全。
+    """
+    total = len(dataset)
+    print(f"  🔍 开始评测 {total} 条数据（并发数: {concurrency}）...")
+
+    semaphore = asyncio.Semaphore(concurrency)
+    log_lock = asyncio.Lock()
+    results: list[tuple[int, str, str, bool]] = []
+
+    async def _eval_one(idx: int, item: dict[str, Any]) -> None:
+        """评测单条样本，结果存入 results。"""
         input_text = item["input"]
         ground_truth = str(item["target"]).strip()
-
-        # 填充 prompt 中的 {input} 占位符
         full_prompt = prompt_instruction.replace("{input}", input_text)
 
-        # 调用模型
-        try:
-            response = await provider.generate(
-                prompt=full_prompt,
-                temperature=0.0,
-                max_tokens=512,
-            )
-            prediction = response.strip()
-        except Exception as e:
-            print(f"  [{i+1}/{total}] ⚠️ 预测失败: {e}")
-            continue
+        async with semaphore:
+            try:
+                response = await provider.generate(
+                    prompt=full_prompt,
+                    temperature=0.0,
+                    max_tokens=512,
+                )
+                prediction = response.strip()
+            except Exception as e:
+                print(f"  [{idx+1}/{total}] ⚠️ 预测失败: {e}")
+                results.append((idx, input_text, "", False))
+                return
 
-        # 判断正确与否
         is_correct = prediction == ground_truth
-        if is_correct:
-            correct += 1
-
-        # 每条都打印：预测值 vs 真实值
         status = "✅" if is_correct else "❌"
-        print(f"  [{i+1}/{total}] {status} 预测: {prediction} | 真实: {ground_truth}")
+        print(f"  [{idx+1}/{total}] {status} 预测: {prediction} | 真实: {ground_truth}")
+        results.append((idx, input_text, prediction, is_correct))
 
-        # 写入评测明细到日志
+        # 写入日志（加锁保证写入顺序）
         if log_file:
             from datetime import datetime
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"\n{'=' * 60}\n")
-                f.write(f"[{ts}] 评测样本 {i+1}/{total}\n")
-                f.write(f"{'=' * 60}\n")
-                f.write(f"\n--- 输入新闻 ---\n{input_text}\n")
-                f.write(f"\n--- 模型预测 ---\n{prediction}\n")
-                f.write(f"\n--- 真实类别 ---\n{ground_truth}\n")
-                f.write(f"\n--- 结果 ---\n{'正确 ✅' if is_correct else '错误 ❌'}\n")
-                f.write(f"{'=' * 60}\n\n")
+            async with log_lock:
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(f"\n{'=' * 60}\n")
+                    f.write(f"[{ts}] 评测样本 {idx+1}/{total}\n")
+                    f.write(f"{'=' * 60}\n")
+                    f.write(f"\n--- 输入新闻 ---\n{input_text}\n")
+                    f.write(f"\n--- 模型预测 ---\n{prediction}\n")
+                    f.write(f"\n--- 真实类别 ---\n{ground_truth}\n")
+                    f.write(f"\n--- 结果 ---\n{'正确 ✅' if is_correct else '错误 ❌'}\n")
+                    f.write(f"{'=' * 60}\n\n")
 
+    # 并发发起所有请求
+    t0 = time.time()
+    await asyncio.gather(*[_eval_one(i, item) for i, item in enumerate(dataset)])
+    elapsed = time.time() - t0
+
+    correct = sum(1 for _, _, _, ok in results if ok)
     accuracy = correct / total if total > 0 else 0
-    print(f"  📊 准确率: {accuracy:.4f} ({correct}/{total})")
+    print(f"  📊 准确率: {accuracy:.4f} ({correct}/{total})  （耗时 {elapsed:.1f}s）")
     return accuracy
 
 
@@ -220,6 +231,7 @@ async def main() -> None:
     parser.add_argument("--skip-baseline", action="store_true", help="跳过 baseline 评测")
     parser.add_argument("--train-samples", type=int, default=100, help="训练时使用的数据条数（默认 0 = 全部）")
     parser.add_argument("--eval-samples", type=int, default=40, help="评测时使用的数据条数（默认 100，用 0 表示全部）")
+    parser.add_argument("--concurrency", type=int, default=5, help="并发请求数（默认 5，设 1 为完全串行）")
     parser.add_argument("--disable-thinking", action="store_true", help="关闭模型的 thinking/reasoning 输出（如 DeepSeek R1、Claude 等）")
     parser.add_argument("--log-file", type=str, default=None, help="模型调用日志文件路径（默认写文件，设路径则用该路径")
     args = parser.parse_args()
@@ -276,7 +288,7 @@ async def main() -> None:
         print("📊 Baseline（初始 Prompt 直接评测）")
         print(f"{'=' * 60}")
         t0 = time.time()
-        baseline_score = await evaluate_prompt(provider, INITIAL_PROMPT, test_data, log_file=log_file)
+        baseline_score = await evaluate_prompt(provider, INITIAL_PROMPT, test_data, concurrency=args.concurrency, log_file=log_file)
         elapsed = time.time() - t0
         print(f"   Baseline Accuracy: {baseline_score:.4f}  ({elapsed:.1f}s)")
         results.append({
