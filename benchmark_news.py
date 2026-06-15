@@ -85,6 +85,69 @@ def save_results(results: list[dict[str, Any]]) -> None:
     print(f"\n📊 结果已保存至: {RESULTS_FILE.resolve()}")
 
 
+def stratified_sample(
+    data: list[dict[str, Any]],
+    n: int,
+    seed: int = 42,
+) -> list[dict[str, Any]]:
+    """分层采样：按原始类别分布抽取 n 条数据，防止分布偏移。
+
+    对每个类别按其原始占比分配配额，随机无放回抽取。
+    若 n 大于等于数据总量，直接返回全部数据。
+    """
+    if n <= 0:
+        return []
+    if n >= len(data):
+        return data
+
+    import random
+    random.seed(seed)
+
+    # 按类别分组
+    from collections import defaultdict
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in data:
+        groups[str(item["target"])].append(item)
+
+    total = len(data)
+    cats = list(groups.keys())
+
+    # 按原始比例算浮点配额，再调整为整数
+    float_quotas: list[tuple[str, float]] = [
+        (cat, len(groups[cat]) / total * n) for cat in cats
+    ]
+
+    # 整数部分
+    int_quotas: dict[str, int] = {cat: int(q) for cat, q in float_quotas}
+    allocated = sum(int_quotas.values())
+    remainder = n - allocated
+
+    # 按小数部分从大到小分配余数
+    remainders = sorted(float_quotas, key=lambda x: -(x[1] - int(x[1])))
+    for cat, _ in remainders[:remainder]:
+        int_quotas[cat] += 1
+
+    # 从每类抽取
+    sampled: list[dict[str, Any]] = []
+    for cat, k in int_quotas.items():
+        items = groups[cat]
+        k = min(k, len(items))
+        sampled.extend(random.sample(items, k))
+
+    random.shuffle(sampled)
+    return sampled
+
+
+def print_data_distribution(data: list[dict[str, Any]], label: str) -> None:
+    """打印数据集的类别分布（验证采样是否保持原始分布）。"""
+    from collections import Counter
+    c = Counter(str(d["target"]) for d in data)
+    total = len(data)
+    print(f"   {label} 类别分布（共 {total} 条）:")
+    for cat, cnt in sorted(c.items()):
+        print(f"     {cat}: {cnt} ({cnt / total * 100:.1f}%)")
+
+
 def enable_logging(provider: LiteLLMProvider, log_file: Path) -> None:
     """包装 provider.generate()，把完整 prompt 和模型返回写入日志文件。"""
     original_generate = provider.generate
@@ -296,8 +359,8 @@ async def main() -> None:
     parser.add_argument("--max-iters", type=int, default=3, help="每个优化器最大迭代轮数")
     parser.add_argument("--num-candidates", type=int, default=8, help="每轮候选 prompt 数")
     parser.add_argument("--skip-baseline", action="store_true", help="跳过 baseline 评测")
-    parser.add_argument("--train-samples", type=int, default=100, help="训练时使用的数据条数（默认 0 = 全部）")
-    parser.add_argument("--eval-samples", type=int, default=40, help="评测时使用的数据条数（默认 100，用 0 表示全部）")
+    parser.add_argument("--train-samples", type=int, default=0, help="训练时使用的数据条数（默认 0 = 全部，分层采样保持类别分布）")
+    parser.add_argument("--eval-samples", type=int, default=100, help="评测时使用的数据条数（默认 100，用 0 表示全部，分层采样保持类别分布）")
     parser.add_argument("--concurrency", type=int, default=5, help="并发请求数（默认 5，设 1 为完全串行）")
     parser.add_argument(
         "--disable-thinking",
@@ -336,16 +399,16 @@ async def main() -> None:
     full_test_data = load_json(TEST_FILE)
     full_train_count = len(full_train_data)
     full_test_count = len(full_test_data)
-    if args.train_samples and args.train_samples > 0 and args.train_samples < full_train_count:
-        train_data = full_train_data[: args.train_samples]
-    else:
-        train_data = full_train_data
-    if args.eval_samples and args.eval_samples > 0 and args.eval_samples < full_test_count:
-        test_data = full_test_data[: args.eval_samples]
-    else:
-        test_data = full_test_data
+    # 分层采样：按原始类别比例抽取，防止分布偏移
+    train_n = args.train_samples if args.train_samples and args.train_samples > 0 else full_train_count
+    eval_n = args.eval_samples if args.eval_samples and args.eval_samples > 0 else full_test_count
+    train_data = stratified_sample(full_train_data, min(train_n, full_train_count))
+    test_data = stratified_sample(full_test_data, min(eval_n, full_test_count))
+
     print(f"   训练集: {len(train_data)} 条（共 {full_train_count} 条）")
     print(f"   评测集: {len(test_data)} 条（共 {full_test_count} 条）")
+    print_data_distribution(train_data, "训练集")
+    print_data_distribution(test_data, "评测集")
 
     # 初始化模型
     api_key = args.api_key or os.environ.get("OPENAI_API_KEY", "")
