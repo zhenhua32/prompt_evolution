@@ -65,7 +65,6 @@ INITIAL_PROMPT = """你是一个新闻分类专家。请根据输入的新闻标
 类别："""
 
 RESULTS_FILE = Path("benchmark_results.json")
-LOG_FILE_DEFAULT = Path("benchmark.log")
 CHECKPOINT_FILE = Path("benchmark_checkpoint.json")
 
 
@@ -297,7 +296,7 @@ async def main() -> None:
     parser.add_argument("--eval-samples", type=int, default=40, help="评测时使用的数据条数（默认 100，用 0 表示全部）")
     parser.add_argument("--concurrency", type=int, default=5, help="并发请求数（默认 5，设 1 为完全串行）")
     parser.add_argument("--disable-thinking", action="store_true", help="关闭模型的 thinking/reasoning 输出（如 DeepSeek R1、Claude 等）")
-    parser.add_argument("--log-file", type=str, default=None, help="模型调用日志文件路径（默认写文件，设路径则用该路径")
+    parser.add_argument("--log-file", type=str, default="benchmark.log", help="模型调用日志文件路径（默认 benchmark.log，设空字符串 '' 可关闭日志）")
     parser.add_argument("--checkpoint-file", type=str, default=None, help="checkpoint 文件路径（默认 benchmark_checkpoint.json）")
     parser.add_argument("--no-checkpoint", action="store_true", help="禁用断点续评（每次从头开始）")
     args = parser.parse_args()
@@ -343,7 +342,7 @@ async def main() -> None:
     )
 
     # 日志文件
-    log_file = Path(args.log_file) if args.log_file else LOG_FILE_DEFAULT
+    log_file = Path(args.log_file) if args.log_file else None
     if log_file:
         enable_logging(provider, log_file)
         from datetime import datetime
