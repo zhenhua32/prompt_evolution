@@ -32,6 +32,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from datetime import datetime
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -72,6 +73,7 @@ CHECKPOINT_FILE = Path("benchmark_checkpoint.json")
 # 工具函数
 # ---------------------------------------------------------------------------
 
+
 def load_json(path: Path) -> list[dict[str, Any]]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -93,7 +95,6 @@ def enable_logging(provider: LiteLLMProvider, log_file: Path) -> None:
         messages = kwargs.get("messages", None)
         text = await original_generate(*args, **kwargs)
 
-        from datetime import datetime
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         async with log_lock:
             with open(log_file, "a", encoding="utf-8") as f:
@@ -146,6 +147,7 @@ def save_checkpoint(method_name: str, done: dict, total: int, checkpoint_file: P
 # ---------------------------------------------------------------------------
 # 评测函数（支持断点续评）
 # ---------------------------------------------------------------------------
+
 
 async def evaluate_prompt(
     provider: LiteLLMProvider,
@@ -224,7 +226,6 @@ async def evaluate_prompt(
 
         # 写入日志
         if log_file:
-            from datetime import datetime
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             async with log_lock:
                 with open(log_file, "a", encoding="utf-8") as f:
@@ -276,6 +277,7 @@ async def run_optimizer(
 # 主流程
 # ---------------------------------------------------------------------------
 
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="新闻分类 Prompt 优化评测")
     parser.add_argument(
@@ -288,16 +290,29 @@ async def main() -> None:
     parser.add_argument("--model", default=default_model, help="LiteLLM 模型标识（也可用 .env 中 MODEL）")
     parser.add_argument("--api-key", default=None, help="API Key（或用 .env 中 OPENAI_API_KEY）")
     default_base_url = os.environ.get("OPENAI_BASE_URL", None)
-    parser.add_argument("--base-url", default=default_base_url, help="OpenAI 兼容 Base URL（也可用 .env 中 OPENAI_BASE_URL）")
+    parser.add_argument(
+        "--base-url", default=default_base_url, help="OpenAI 兼容 Base URL（也可用 .env 中 OPENAI_BASE_URL）"
+    )
     parser.add_argument("--max-iters", type=int, default=3, help="每个优化器最大迭代轮数")
     parser.add_argument("--num-candidates", type=int, default=8, help="每轮候选 prompt 数")
     parser.add_argument("--skip-baseline", action="store_true", help="跳过 baseline 评测")
     parser.add_argument("--train-samples", type=int, default=100, help="训练时使用的数据条数（默认 0 = 全部）")
     parser.add_argument("--eval-samples", type=int, default=40, help="评测时使用的数据条数（默认 100，用 0 表示全部）")
     parser.add_argument("--concurrency", type=int, default=5, help="并发请求数（默认 5，设 1 为完全串行）")
-    parser.add_argument("--disable-thinking", action="store_true", help="关闭模型的 thinking/reasoning 输出（如 DeepSeek R1、Claude 等）")
-    parser.add_argument("--log-file", type=str, default="benchmark.log", help="模型调用日志文件路径（默认 benchmark.log，设空字符串 '' 可关闭日志）")
-    parser.add_argument("--checkpoint-file", type=str, default=None, help="checkpoint 文件路径（默认 benchmark_checkpoint.json）")
+    parser.add_argument(
+        "--disable-thinking",
+        action="store_true",
+        help="关闭模型的 thinking/reasoning 输出（如 DeepSeek R1、Claude 等）",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default="benchmark.log",
+        help="模型调用日志文件路径（默认 benchmark.log，设空字符串 '' 可关闭日志）",
+    )
+    parser.add_argument(
+        "--checkpoint-file", type=str, default=None, help="checkpoint 文件路径（默认 benchmark_checkpoint.json）"
+    )
     parser.add_argument("--no-checkpoint", action="store_true", help="禁用断点续评（每次从头开始）")
     args = parser.parse_args()
 
@@ -322,11 +337,11 @@ async def main() -> None:
     full_train_count = len(full_train_data)
     full_test_count = len(full_test_data)
     if args.train_samples and args.train_samples > 0 and args.train_samples < full_train_count:
-        train_data = full_train_data[:args.train_samples]
+        train_data = full_train_data[: args.train_samples]
     else:
         train_data = full_train_data
     if args.eval_samples and args.eval_samples > 0 and args.eval_samples < full_test_count:
-        test_data = full_test_data[:args.eval_samples]
+        test_data = full_test_data[: args.eval_samples]
     else:
         test_data = full_test_data
     print(f"   训练集: {len(train_data)} 条（共 {full_train_count} 条）")
@@ -337,15 +352,16 @@ async def main() -> None:
     if not api_key and args.model.startswith("openai/"):
         print("⚠️ 警告：未提供 API Key，请设置 OPENAI_API_KEY 环境变量或用 --api-key")
     provider = LiteLLMProvider(
-        model=args.model, api_key=api_key,
-        api_base=args.base_url, disable_thinking=args.disable_thinking,
+        model=args.model,
+        api_key=api_key,
+        api_base=args.base_url,
+        disable_thinking=args.disable_thinking,
     )
 
     # 日志文件
     log_file = Path(args.log_file) if args.log_file else None
     if log_file:
         enable_logging(provider, log_file)
-        from datetime import datetime
         with open(log_file, "w", encoding="utf-8") as f:
             f.write(f"Prompt Evolution Benchmark 日志\n")
             f.write(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -368,7 +384,9 @@ async def main() -> None:
         print(f"{'=' * 60}")
         t0 = time.time()
         baseline_score = await evaluate_prompt(
-            provider, INITIAL_PROMPT, test_data,
+            provider,
+            INITIAL_PROMPT,
+            test_data,
             concurrency=args.concurrency,
             log_file=log_file,
             checkpoint_file=checkpoint_file,
@@ -376,11 +394,13 @@ async def main() -> None:
         )
         elapsed = time.time() - t0
         print(f"   Baseline Accuracy: {baseline_score:.4f}  ({elapsed:.1f}s)")
-        results.append({
-            "method": "baseline",
-            "score": baseline_score,
-            "elapsed_s": elapsed,
-        })
+        results.append(
+            {
+                "method": "baseline",
+                "score": baseline_score,
+                "elapsed_s": elapsed,
+            }
+        )
 
     # —— 各优化器 ——
     methods = args.methods or list(list_optimizers())
@@ -418,14 +438,16 @@ async def main() -> None:
             print(f"   ✅ 最优 Prompt 得分: {score:.4f}")
             print(f"   耗时: {elapsed:.1f}s")
             print(f"   最优 Prompt: {result.best_prompt.instruction[:100]}...")
-            results.append({
-                "method": method,
-                "score": score,
-                "elapsed_s": elapsed,
-                "best_prompt": result.best_prompt.instruction if result.best_prompt else "",
-                "num_candidates_evaluated": result.num_candidates_evaluated,
-                "total_cost_usd": result.total_cost_usd,
-            })
+            results.append(
+                {
+                    "method": method,
+                    "score": score,
+                    "elapsed_s": elapsed,
+                    "best_prompt": result.best_prompt.instruction if result.best_prompt else "",
+                    "num_candidates_evaluated": result.num_candidates_evaluated,
+                    "total_cost_usd": result.total_cost_usd,
+                }
+            )
             # 将优化器结果写入 checkpoint
             if checkpoint_file:
                 try:
