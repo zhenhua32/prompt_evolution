@@ -31,8 +31,11 @@ class F1ScoreMetric(BaseMetric):
 
         f1_scores: list[float] = []
         for pred, ref in zip(predictions, references):
-            pred_tokens = set(_tokenize(pred))
-            ref_tokens = set(_tokenize(ref))
+            # 用 Counter（多重集）而非 set —— set 会丢词频，导致
+            # pred="是 是 是 巴黎" / ref="巴黎" 的 precision 被高估。
+            # 标准 token-level F1（SQuAD 风格）用 Counter 计算重叠。
+            pred_tokens = Counter(_tokenize(pred))
+            ref_tokens = Counter(_tokenize(ref))
 
             if not ref_tokens:
                 f1_scores.append(1.0 if not pred_tokens else 0.0)
@@ -41,9 +44,10 @@ class F1ScoreMetric(BaseMetric):
                 f1_scores.append(0.0)
                 continue
 
-            overlap = pred_tokens & ref_tokens
-            precision = len(overlap) / len(pred_tokens)
-            recall = len(overlap) / len(ref_tokens)
+            # 交集取最小频次（Counter & 的语义）
+            overlap = sum((pred_tokens & ref_tokens).values())
+            precision = overlap / sum(pred_tokens.values())
+            recall = overlap / sum(ref_tokens.values())
             if precision + recall == 0.0:
                 f1 = 0.0
             else:

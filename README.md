@@ -6,7 +6,7 @@
 
 ## 特性
 
-- **多算法集成**：APE、OPRO、DSPy（BootstrapFewShot / MIPROv2 / COPRO / GEPA）、PromptBreeder、EvoPrompt、SPO（持续增加中）
+- **多算法集成**：APE、OPRO、DSPy（轻量自实现，参考 DSPy BootstrapFewShot 思路）、PromptBreeder、EvoPrompt、SPO（持续增加中）
 - **多模型支持**：通过 [LiteLLM](https://github.com/BerriAI/litellm) 统一接入 OpenAI / Anthropic / Gemini / DeepSeek / Ollama 等 100+ 模型
 - **统一接口**：所有优化器实现同一 `BaseOptimizer` 接口，`optimize()` → `OptimizationResult`
 - **评估框架**：内置 Accuracy、ExactMatch、F1、ROUGE、BLEU 等指标，支持 LLM-as-Judge
@@ -281,11 +281,11 @@ asyncio.run(main())
 prompt_evolution/
 ├── src/prompt_evolution/   # 主包
 │   ├── core/                  # 抽象基类（BaseOptimizer / BaseModelProvider / BaseEvaluator）
-│   ├── providers/            # 模型提供商（LiteLLM / OpenAI / Anthropic / ...）
+│   ├── providers/            # 模型提供商（LiteLLM 统一接入 100+ 模型）
 │   ├── optimizers/            # 优化算法实现
 │   │   ├── ape/                # APE (Automatic Prompt Engineer)
 │   │   ├── opro/               # OPRO (Optimization by PROmpting)
-│   │   ├── dspy_optimizer/     # DSPy 优化器封装
+│   │   ├── dspy_optimizer/     # DSPy 思路轻量实现（BootstrapFewShot，不依赖 dspy 库）
 │   │   ├── prompt_breeder/     # PromptBreeder (进化算法)
 │   │   ├── evoprompt/          # EvoPrompt (进化 Prompt 优化)
 │   │   └── spo/                # SPO (语义邻域搜索)
@@ -303,22 +303,20 @@ prompt_evolution/
 
 | 方法 | 状态 | 说明 |
 |------|------|------|
-| APE | ✅ MVP | 生成-筛选两阶段，快速原型 |
-| OPRO | 🚧 开发中 | 用 LLM 作为优化器迭代优化 |
-| DSPy (BootstrapFewShot) | 🚧 开发中 | 自动生成 few-shot 示例 |
-| DSPy (MIPROv2) | 🚧 开发中 | 同时优化指令和演示 |
-| DSPy (COPRO) | 🚧 开发中 | 坐标上升优化指令与示例 |
-| PromptBreeder | 🚧 开发中 | 进化算法 + 自我繁殖 Prompt |
-| EvoPrompt | 📋 待开发 | 基于进化算法的 prompt 优化 |
-| SPO | 📋 待开发 | 语义邻域搜索优化 |
+| APE | ✅ 已实现 | 生成-筛选两阶段，快速原型 |
+| OPRO | ✅ 已实现 | 用 LLM 作为优化器迭代优化 |
+| DSPy | ✅ 已实现 | 轻量自实现（BootstrapFewShot 思路，不依赖 dspy 库） |
+| PromptBreeder | ✅ 已实现 | 进化算法 + 自我繁殖 Prompt |
+| EvoPrompt | ✅ 已实现 | 基于进化算法的 prompt 优化（含早停） |
+| SPO | ✅ 已实现 | 语义邻域搜索优化 |
 
 ---
 
 ## 开发路线图
 
-- **Phase 1**（当前）：MVP 核心闭环 — APE + 基础评估 + Web UI
-- **Phase 2**：算法扩展 — OPRO + EvoPrompt + DSPy 全系列 + 完善评估指标
-- **Phase 3**：生产就绪 — 红队测试 + CI/CD + Docker + PyPI 发布
+- **Phase 1**：MVP 核心闭环 — APE + 基础评估 + Web UI ✅
+- **Phase 2**：算法扩展 — OPRO + EvoPrompt + DSPy + PromptBreeder + SPO + 完善评估指标 ✅
+- **Phase 3**（当前）：生产就绪 — 修复评估链路 bug + 测试覆盖 + CI/CD + Docker + PyPI 发布
 
 ---
 
@@ -327,7 +325,6 @@ prompt_evolution/
 - **Python 3.10+**
 - **LiteLLM** — 多模型统一接口
 - **Gradio** — Web UI
-- **DSPy** — 优化算法集成
 - **Pydantic v2** — 数据验证
 - **loguru** — 日志
 

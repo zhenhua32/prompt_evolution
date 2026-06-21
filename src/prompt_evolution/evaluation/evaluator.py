@@ -87,24 +87,52 @@ class Evaluator(BaseEvaluator):
         prompt.evaluated = True
         return final_score
 
-    def evaluate_batch(
+    def compute_metrics(
+        self,
+        predictions: List[str],
+        references: List[str],
+    ) -> Dict[str, float]:
+        """对已生成的 predictions / references 直接计算各指标，返回 {name: score}。
+
+        适用于 UI「评估 Tab」这种「先自行推理、再算分」的场景 ——
+        无需走完整的 ``evaluate(prompt, dataset, provider)`` 流程。
+        """
+        if not self._metrics:
+            logger.warning("Evaluator 未配置任何指标，返回空字典")
+            return {}
+        result: Dict[str, float] = {}
+        for metric in self._metrics:
+            try:
+                score = metric.compute(predictions, references)
+                result[metric.name] = score
+                logger.debug("Metric '{}' score={:.4f}", metric.name, score)
+            except Exception as exc:
+                logger.error("Metric '{}' 计算失败: {}", metric.name, exc)
+                result[metric.name] = 0.0
+        return result
+
+    async def evaluate_batch(
         self,
         prompts: List[PromptCandidate],
         dataset: List[Dict[str, Any]],
         model_provider: Any,
         parallel: int = 5,
     ) -> List[float]:
-        """批量评估多个 prompt（并发）。"""
-        import asyncio
+        """批量评估多个 prompt（并发）。
 
-        async def _eval_one(p: PromptCandidate) -> float:
-            return await self.evaluate(p, dataset, model_provider)
+        异步实现 —— 调用方需 ``await``。旧实现用 ``asyncio.run()`` 在已有
+        事件循环内会抛 ``RuntimeError``，且 ``parallel`` 参数被忽略。
+        现用 ``Semaphore(parallel)`` 真正控制并发度。
+        """
+        semaphore = asyncio.Semaphore(max(1, parallel))
+        results: List[float] = [0.0] * len(prompts)
 
-        async def _run_all() -> List[float]:
-            # 简单并发控制（Python asyncio 不支持真正的 max_workers，这里用 gather）
-            return await asyncio.gather(*(_eval_one(p) for p in prompts))
+        async def _eval_one(idx: int, p: PromptCandidate) -> None:
+            async with semaphore:
+                results[idx] = await self.evaluate(p, dataset, model_provider)
 
-        return asyncio.run(_run_all())
+        await asyncio.gather(*(_eval_one(i, p) for i, p in enumerate(prompts)))
+        return results
 
     # ------------------------------------------------------------------
     # 内部方法

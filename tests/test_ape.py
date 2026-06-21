@@ -29,6 +29,8 @@ def mock_provider() -> MagicMock:
     )
     provider.count_tokens = MagicMock(return_value=100)
     provider.estimate_cost = MagicMock(return_value=0.001)
+    # 费用追踪属性需为真实 float（APE 用增量法 total_cost_usd - cost_before）
+    provider.total_cost_usd = 0.05
     return provider
 
 

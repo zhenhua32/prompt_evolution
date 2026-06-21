@@ -165,7 +165,8 @@ class EVOPromptOptimizer(BaseOptimizer):
         best_score_so_far: float = 0.0
         patience_counter: int = 0
 
-        random.seed(42)
+        # 用局部 Random 实例而非全局 random.seed，避免污染同进程其他随机逻辑。
+        rng = random.Random(42)
 
         # 1. 初始化种群
         logger.info("EVOPrompt: initializing population...")
@@ -234,16 +235,16 @@ class EVOPromptOptimizer(BaseOptimizer):
 
             # 变异
             for elite in elites:
-                if random.random() < self._mutation_rate:
+                if rng.random() < self._mutation_rate:
                     for _ in range(self._num_mutations):
                         child = await self._mutate(elite, iteration)
                         children.append(child)
 
             # 交叉（随机配对精英）
             if len(elites) >= 2:
-                random.shuffle(elites)
+                rng.shuffle(elites)
                 for i in range(0, len(elites) - 1, 2):
-                    if random.random() < self._crossover_rate:
+                    if rng.random() < self._crossover_rate:
                         child = await self._crossover(
                             elites[i], elites[i + 1], iteration
                         )

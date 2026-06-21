@@ -190,9 +190,11 @@ class DSPyOptimizer(BaseOptimizer):
 
             self.on_iteration_end(iteration, candidates)
 
-            # 早停：如果连续若干轮无提升可提前退出（简单实现：暂不早停）
+            # 早停：连续 3 轮相邻最优分数差均 < 0.001 时退出。
+            # 旧实现 `range(1, 4)` 访问 `_scores[-1].._scores[-4]`，
+            # len==3 时 `_scores[-4]` 越界回绕到 `_scores[-1]`（逻辑错误）。
             _scores = [h["best_score"] for h in history]
-            if len(_scores) >= 3 and all(
+            if len(_scores) >= 4 and all(
                 abs(_scores[-i] - _scores[-i - 1]) < 0.001 for i in range(1, 4)
             ):
                 logger.info("DSPy early stopping: no improvement in 3 iterations")
@@ -260,8 +262,9 @@ class DSPyOptimizer(BaseOptimizer):
         """
         import random
 
-        random.seed(42)
-        sampled = random.sample(dataset, min(num_samples, len(dataset)))
+        # 用局部 Random 实例而非全局 random.seed，避免污染同进程其他随机逻辑。
+        rng = random.Random(42)
+        sampled = rng.sample(dataset, min(num_samples, len(dataset)))
 
         instruction = prompt.instruction
         has_placeholder = "{input}" in instruction

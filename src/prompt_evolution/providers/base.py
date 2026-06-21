@@ -6,45 +6,10 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
-
+# 重导出 core.base 中的 BaseModelProvider，保持单一权威定义。
+# 旧实现在此文件平行定义了同名类，导致两个不同抽象类并存：
+# LiteLLMProvider 继承的是 core.base 版本，而 providers/__init__.py
+# 导出的是本文件版本 —— 二者类型不兼容，会让外部子类化时困惑。
 from prompt_evolution.core.base import BaseModelProvider
 
-
-class BaseModelProvider(ABC):
-    """所有模型提供商的抽象基类。
-
-    统一屏蔽 OpenAI / Anthropic / Gemini / Ollama 等差异。
-    """
-
-    @abstractmethod
-    async def generate(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        **kwargs: Any,
-    ) -> str:
-        """调用 LLM 生成文本，返回纯文本响应。"""
-        ...
-
-    @abstractmethod
-    async def generate_with_logprobs(
-        self,
-        prompt: str,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        """生成文本并返回 logprobs（部分优化算法需要）。"""
-        ...
-
-    @abstractmethod
-    def count_tokens(self, text: str) -> int:
-        """计算文本的 token 数。"""
-        ...
-
-    @abstractmethod
-    def estimate_cost(self, prompt: str, completion: str) -> float:
-        """估算一次调用的费用（美元）。"""
-        ...
+__all__ = ["BaseModelProvider"]

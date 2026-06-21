@@ -75,14 +75,14 @@ class BaseEvaluator(ABC):
         ...
 
     @abstractmethod
-    def evaluate_batch(
+    async def evaluate_batch(
         self,
         prompts: List[PromptCandidate],
         dataset: List[Dict[str, Any]],
         model_provider: BaseModelProvider,
         parallel: int = 5,
     ) -> List[float]:
-        """批量评估多个 prompt（并发）。"""
+        """批量评估多个 prompt（并发，异步）。"""
         ...
 
 

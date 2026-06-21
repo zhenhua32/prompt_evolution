@@ -80,7 +80,9 @@ class APEOptimizer(BaseOptimizer):
         import time
 
         start_time = time.time()
-        total_cost: float = 0.0
+        # 用增量法统计费用：开头记录 provider 累计费用，结尾取差值。
+        # 旧实现 `total_cost += provider._total_cost` 是累加累计值（平方级虚高）。
+        cost_before: float = getattr(self.model_provider, "total_cost_usd", 0.0)
         all_candidates: List[PromptCandidate] = []
         history: List[Dict[str, Any]] = []
 
@@ -109,7 +111,6 @@ class APEOptimizer(BaseOptimizer):
                     model_provider=self.model_provider,
                 )
                 candidate.score = score
-                total_cost += getattr(self.model_provider, "_total_cost", 0.0)
                 logger.debug("Candidate '{}' score={:.4f}", candidate.id[:8], score)
 
             all_candidates.extend(candidates)
@@ -135,6 +136,7 @@ class APEOptimizer(BaseOptimizer):
         best_prompt = max(all_candidates, key=lambda c: c.score)
 
         elapsed = time.time() - start_time
+        total_cost: float = getattr(self.model_provider, "total_cost_usd", 0.0) - cost_before
         logger.info(
             "APE done: best_score={:.4f}, elapsed={:.1f}s, total_cost=${:.4f}",
             best_prompt.score,

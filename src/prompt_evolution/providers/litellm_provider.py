@@ -13,8 +13,8 @@ from typing import Any, Dict, Optional
 import litellm
 from loguru import logger
 
-# 自动忽略模型不支持的参数（如 thinking），避免 UnsupportedParamsError
-litellm.drop_params = True
+# 不再在模块导入时修改 litellm 全局配置（litellm.drop_params = True），
+# 避免影响同进程内其他 litellm 使用者。改为每次 acompletion 调用传 drop_params=True。
 
 from prompt_evolution.core.base import BaseModelProvider
 
@@ -144,7 +144,7 @@ class LiteLLMProvider(BaseModelProvider):
             call_kwargs["thinking"] = {"type": "disabled"}
 
         try:
-            response = await litellm.acompletion(**call_kwargs, **kwargs)
+            response = await litellm.acompletion(**call_kwargs, **kwargs, drop_params=True)
             text = response.choices[0].message.content or ""
             # 追踪费用
             if hasattr(response, "usage") and response.usage:
@@ -157,16 +157,28 @@ class LiteLLMProvider(BaseModelProvider):
     async def generate_with_logprobs(
         self,
         prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """生成文本并返回 logprobs。"""
-        messages = [{"role": "user", "content": prompt}]
+        """生成文本并返回 logprobs。
+
+        与 ``generate`` 接口对齐：支持 system_prompt / temperature / max_tokens，
+        并加异常处理（``generate`` 有，旧实现没有）。
+        """
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
 
         call_kwargs: Dict[str, Any] = {
             "model": self._model,
             "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
             "logprobs": True,
-            "top_logprobs": kwargs.get("top_logprobs", 5),
+            "top_logprobs": kwargs.pop("top_logprobs", 5),
         }
         if self._api_key:
             call_kwargs["api_key"] = self._api_key
@@ -175,16 +187,16 @@ class LiteLLMProvider(BaseModelProvider):
         if self._disable_thinking:
             call_kwargs["thinking"] = {"type": "disabled"}
 
-        # 移除已处理的参数
-        for k in ["top_logprobs"]:
-            kwargs.pop(k, None)
-
-        response = await litellm.acompletion(**call_kwargs, **kwargs)
-        return {
-            "text": response.choices[0].message.content,
-            "logprobs": getattr(response.choices[0], "logprobs", None),
-            "usage": response.usage,
-        }
+        try:
+            response = await litellm.acompletion(**call_kwargs, **kwargs, drop_params=True)
+            return {
+                "text": response.choices[0].message.content or "",
+                "logprobs": getattr(response.choices[0], "logprobs", None),
+                "usage": response.usage,
+            }
+        except Exception as exc:
+            logger.error("LiteLLM logprobs call failed: model={} err={}", self._model, exc)
+            raise
 
     def count_tokens(self, text: str) -> int:
         """使用 tiktoken 计算 token 数（LiteLLM 内部也用此方式）。"""
@@ -198,7 +210,13 @@ class LiteLLMProvider(BaseModelProvider):
             return len(text) // 4
 
     def estimate_cost(self, prompt: str, completion: str) -> float:
-        """使用 LiteLLM 的 cost_per_token 工具估算费用。"""
+        """使用 LiteLLM 的 cost_per_token 工具估算费用。
+
+        ``litellm.cost_per_token`` 在不同版本返回类型不同：
+        - 旧版：返回 ``(prompt_cost, completion_cost)`` 元组
+        - 新版：返回单 float
+        这里统一处理，确保返回 float。
+        """
         try:
             prompt_tokens = self.count_tokens(prompt)
             completion_tokens = self.count_tokens(completion)
@@ -207,6 +225,9 @@ class LiteLLMProvider(BaseModelProvider):
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
-            return cost or 0.0
+            if isinstance(cost, tuple):
+                # (prompt_cost, completion_cost)
+                return float(sum(cost))
+            return float(cost or 0.0)
         except Exception:
             return 0.0

@@ -1,6 +1,8 @@
 """Evaluation metrics sub-package.
 
-导入本模块时自动注册所有内置指标（通过 BaseMetric 的 __init_subclass__ 机制）。
+导入本模块时通过 ``@register_metric`` 装饰器把所有内置指标注册到
+``_REGISTRY``（见 ``base.py``）。新增指标时务必给类加上该装饰器，
+否则 ``get_metric`` / ``list_metrics`` 将无法发现它。
 """
 
 from __future__ import annotations

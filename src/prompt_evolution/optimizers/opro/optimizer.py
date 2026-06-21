@@ -294,8 +294,9 @@ class OPROOptimizer(BaseOptimizer):
 
         # 4. 历史 prompt 及其得分（按得分从高到低排序）
         sorted_history = sorted(scored_history, key=lambda x: x[1], reverse=True)
-        # 只保留最近最多 20 条历史，避免超出 context window
-        recent_history = sorted_history[-20:]
+        # 只保留得分最高的最多 20 条历史（喂给 LLM 当高质量参考）。
+        # 旧实现用 [-20:] 取的是分数最低的 20 条，与注释意图相反。
+        recent_history = sorted_history[:20]
 
         parts.append("Here are the prompts tried so far and their scores:\n\n")
         for i, (prompt_text, score) in enumerate(recent_history):
@@ -305,9 +306,11 @@ class OPROOptimizer(BaseOptimizer):
         parts.append(
             f"Based on the above, generate {self._num_candidates} NEW and IMPROVED prompts.\n"
         )
-        parts.append(
-            f"Each prompt should be different and aim to score higher than {recent_history[-1][1]:.4f}.\n"
-        )
+        if recent_history:
+            best_score = recent_history[0][1]
+            parts.append(
+                f"Each prompt should be different and aim to score higher than {best_score:.4f}.\n"
+            )
         parts.append(
             f"Output each candidate wrapped in triple backticks: ```<prompt>```\n"
         )

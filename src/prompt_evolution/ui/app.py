@@ -96,19 +96,39 @@ def _load_dataset(dataset_file: Any) -> Tuple[List[Dict], str]:
 async def _run_prompt_on_dataset(
     prompt_text: str, dataset: List[Dict], provider: LiteLLMProvider
 ) -> List[str]:
-    """将 prompt 应用到数据集每条样本，返回模型预测列表。"""
-    predictions: List[str] = []
-    for item in dataset:
-        try:
-            resp = await provider.generate(
-                prompt=item.get("input", ""),
-                system_prompt=prompt_text,
-                temperature=0.0,
-            )
-            predictions.append(resp.strip())
-        except Exception as exc:
-            logger.warning("预测失败: {exc}")
-            predictions.append("")
+    """将 prompt 应用到数据集每条样本，返回模型预测列表。
+
+    与 ``Evaluator._generate_predictions`` 链路对齐：
+    - 若 prompt 含 ``{input}`` 占位符，用 ``replace`` 嵌入用户输入，
+      保留 prompt 末尾的输出引导（如 ``\\n类别：``）。
+    - 否则退化为 instruction + 用户输入拼接。
+    - 不传 system_prompt，避免 instruction 双发。
+    """
+    import asyncio
+
+    has_placeholder = "{input}" in prompt_text
+    predictions: List[str] = [""] * len(dataset)
+    semaphore = asyncio.Semaphore(5)
+
+    async def _predict(idx: int, item: Dict) -> None:
+        user_input = item.get("input", item.get("question", item.get("query", "")))
+        if has_placeholder:
+            full_prompt = prompt_text.replace("{input}", str(user_input))
+        else:
+            full_prompt = f"{prompt_text}\n\n{user_input}"
+        async with semaphore:
+            try:
+                resp = await provider.generate(
+                    prompt=full_prompt,
+                    system_prompt=None,
+                    temperature=0.0,
+                )
+                predictions[idx] = resp.strip()
+            except Exception as exc:
+                logger.warning("预测失败: {}", exc)
+                predictions[idx] = ""
+
+    await asyncio.gather(*(_predict(i, item) for i, item in enumerate(dataset)))
     return predictions
 
 
@@ -243,7 +263,8 @@ async def run_evaluation(
 
     progress(0.8, desc="计算评估指标...")
     evaluator = Evaluator(metrics=[AccuracyMetric(), ExactMatchMetric(), F1ScoreMetric()])
-    scores = evaluator.evaluate(predictions, references)
+    # 用纯计算接口：predictions 已自行生成，无需再走 evaluate(prompt, dataset, provider)。
+    scores = evaluator.compute_metrics(predictions, [str(r) for r in references])
 
     # 格式化结果
     lines = ["| 指标 | 得分 |", "|------|------|"]
