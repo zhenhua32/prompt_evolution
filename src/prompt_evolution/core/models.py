@@ -16,6 +16,12 @@ class PromptCandidate(BaseModel):
         description="Few-shot 示例，每项形如 {'role': 'user', 'content': '...'}",
     )
     score: float = Field(0.0, description="评估得分，越高越好")
+    evaluated: bool = Field(
+        False,
+        description="是否已被 Evaluator 评估过。"
+        "进化算法用此标记区分「未评估（score=0.0 默认值）」与「真实得分为 0.0」的候选，"
+        "避免把未评估的候选误当作已评估而跳过。",
+    )
     metadata: Dict[str, Any] = Field(
         default_factory=dict, description="算法自定义扩展字段"
     )

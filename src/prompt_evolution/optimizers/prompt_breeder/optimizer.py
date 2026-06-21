@@ -171,29 +171,24 @@ class PromptBreederOptimizer(BaseOptimizer):
         for iteration in range(1, max_iterations + 1):
             self.on_iteration_start(iteration)
 
-            # 评估种群中所有未评估的 prompt
-            unevaluated = [p for p in population if p.score is None]
+            # 评估种群中所有未评估的 prompt。
+            # 用 `evaluated` 标记而非 `score is None` 判断——后者恒为 False
+            # （score 默认 0.0，是 float 非 Optional），会导致子代从未被评估。
+            unevaluated = [p for p in population if not p.evaluated]
             for candidate in unevaluated:
                 score = await self.evaluator.evaluate(
                     prompt=candidate,
                     dataset=dataset,
                     model_provider=self.model_provider,
                 )
+                # Evaluator.evaluate 内部已设置 candidate.score 和 candidate.evaluated=True，
+                # 这里保留赋值仅为日志可读性。
                 candidate.score = score
                 logger.debug(
                     "PromptBreeder pop member '{}' score={:.4f}",
                     candidate.id[:8],
                     score,
                 )
-            # 也重新评估整个种群（有些可能是上轮已评估的，score 已设）
-            for candidate in population:
-                if candidate.score is None:
-                    score = await self.evaluator.evaluate(
-                        prompt=candidate,
-                        dataset=dataset,
-                        model_provider=self.model_provider,
-                    )
-                    candidate.score = score
 
             # 按适应度排序
             population.sort(key=lambda c: c.score, reverse=True)
@@ -250,7 +245,24 @@ class PromptBreederOptimizer(BaseOptimizer):
 
             self.on_iteration_end(iteration, children)
 
-        # 5. 选出全局最优
+        # 5. 最终评估：主循环结束后，对 all_candidates 中所有未评估的候选
+        #    （主要是最后一轮产生的子代）做一次评估，确保 best_prompt 选择公平、
+        #    num_candidates_evaluated 统计准确。
+        pending_final = [c for c in all_candidates if not c.evaluated]
+        if pending_final:
+            logger.info(
+                "PromptBreeder: final evaluation of {} pending candidates",
+                len(pending_final),
+            )
+            for candidate in pending_final:
+                score = await self.evaluator.evaluate(
+                    prompt=candidate,
+                    dataset=dataset,
+                    model_provider=self.model_provider,
+                )
+                candidate.score = score
+
+        # 6. 选出全局最优
         best_prompt = max(all_candidates, key=lambda c: c.score or 0.0)
 
         total_cost: float = self.model_provider.total_cost_usd - cost_before
@@ -271,7 +283,7 @@ class PromptBreederOptimizer(BaseOptimizer):
             total_cost_usd=total_cost,
             elapsed_time_s=elapsed,
             num_iterations=max_iterations,
-            num_candidates_evaluated=len([c for c in all_candidates if c.score is not None]),
+            num_candidates_evaluated=len([c for c in all_candidates if c.evaluated]),
         )
 
     # ------------------------------------------------------------------

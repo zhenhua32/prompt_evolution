@@ -468,17 +468,24 @@ async def main() -> None:
     # —— 各优化器 ——
     methods = args.methods or list(list_optimizers())
     for method in methods:
-        # 检查 checkpoint 是否已完整
+        # 检查 checkpoint 是否已完整（必须有 test_accuracy 才算完成）
         if checkpoint_file and checkpoint_file.exists():
             try:
                 with open(checkpoint_file, "r", encoding="utf-8") as f:
                     cp = json.load(f)
-                if method in cp and cp[method].get("accuracy") is not None:
-                    acc = cp[method]["accuracy"]
+                method_cp = cp.get(method, {})
+                test_acc = method_cp.get("test_accuracy")
+                if test_acc is not None:
                     print(f"\n{'=' * 60}")
-                    print(f"✅ {method} 在 checkpoint 中已完整（Accuracy: {acc:.4f}），跳过")
+                    print(f"✅ {method} 在 checkpoint 中已完整（test_acc: {test_acc:.4f}），跳过")
                     print(f"{'=' * 60}")
-                    results.append({"method": method, "score": acc, "from_checkpoint": True})
+                    results.append({
+                        "method": method,
+                        "score": test_acc,  # 主指标：测试集准确率
+                        "train_score": method_cp.get("train_score"),
+                        "elapsed_s": method_cp.get("elapsed_s", 0),
+                        "from_checkpoint": True,
+                    })
                     continue
             except Exception:
                 pass
@@ -496,17 +503,35 @@ async def main() -> None:
                 max_iterations=args.max_iters,
                 num_candidates=args.num_candidates,
             )
+            train_score = result.best_prompt.score if result.best_prompt else 0.0
+            best_instruction = result.best_prompt.instruction if result.best_prompt else INITIAL_PROMPT
+            print(f"   ✅ 优化器报告得分 (train): {train_score:.4f}")
+            print(f"   耗时: {time.time() - t0:.1f}s")
+            print(f"   最优 Prompt: {best_instruction[:100]}...")
+
+            # —— 关键：用 best_prompt 在测试集上评测，与 baseline 同口径 ——
+            # 优化器报告的 train_score 是训练集得分，与 baseline 的测试集准确率不可比。
+            # 必须在测试集上重新评测，才能公平比较优化器是否真的提升了 prompt。
+            print(f"   📊 在测试集上评测最优 Prompt...")
+            test_score = await evaluate_prompt(
+                provider,
+                best_instruction,
+                test_data,
+                concurrency=args.concurrency,
+                log_file=log_file,
+                checkpoint_file=checkpoint_file,
+                method_name=f"{method}__test",
+            )
             elapsed = time.time() - t0
-            score = result.best_prompt.score if result.best_prompt else 0.0
-            print(f"   ✅ 最优 Prompt 得分: {score:.4f}")
-            print(f"   耗时: {elapsed:.1f}s")
-            print(f"   最优 Prompt: {result.best_prompt.instruction[:100]}...")
+            print(f"   📊 测试集准确率 (test): {test_score:.4f}")
+
             results.append(
                 {
                     "method": method,
-                    "score": score,
+                    "score": test_score,  # 主指标：测试集准确率（与 baseline 同口径）
+                    "train_score": train_score,  # 参考指标：优化器训练集得分
                     "elapsed_s": elapsed,
-                    "best_prompt": result.best_prompt.instruction if result.best_prompt else "",
+                    "best_prompt": best_instruction,
                     "num_candidates_evaluated": result.num_candidates_evaluated,
                     "total_cost_usd": result.total_cost_usd,
                 }
@@ -520,9 +545,10 @@ async def main() -> None:
                     cp = {}
                 cp[method] = {
                     "done": [],  # 优化器不保存逐条结果
-                    "score": score,
+                    "train_score": train_score,
+                    "test_accuracy": test_score,  # 主指标
                     "elapsed_s": elapsed,
-                    "accuracy": score,
+                    "best_prompt": best_instruction,
                     "total": len(test_data),
                 }
                 with open(checkpoint_file, "w", encoding="utf-8") as f:
@@ -535,13 +561,16 @@ async def main() -> None:
     print(f"\n{'=' * 60}")
     print("📊 评测结果汇总")
     print(f"{'=' * 60}")
-    print(f"{'方法':<20} {'Accuracy':<12} {'耗时(s)':<12}")
+    print(f"{'方法':<24} {'Test Acc':<12} {'Train Acc':<12} {'耗时(s)':<12}")
     print("-" * 60)
     for r in results:
         score_str = f"{r['score']:.4f}" if r.get("score") is not None else "ERROR"
-        elapsed_str = f"{r.get('elapsed_s', 0):.1f}" if r.get("from_checkpoint") else f"{r.get('elapsed_s', 0):.1f}"
-        print(f"{r['method']:<20} {score_str:<12} {elapsed_str:<12}")
+        train_str = f"{r['train_score']:.4f}" if r.get("train_score") is not None else "-"
+        elapsed_str = f"{r.get('elapsed_s', 0):.1f}"
+        print(f"{r['method']:<24} {score_str:<12} {train_str:<12} {elapsed_str:<12}")
     print(f"{'=' * 60}")
+    print("注：Test Acc = 最优 prompt 在测试集上的准确率（与 baseline 同口径，可对比）")
+    print("    Train Acc = 优化器报告的训练集得分（仅供参考，反映过拟合情况）")
 
     save_results(results)
 

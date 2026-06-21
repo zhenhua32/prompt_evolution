@@ -80,6 +80,11 @@ class Evaluator(BaseEvaluator):
             prompt.id[:8],
             final_score,
         )
+        # 原地回写评估结果，让调用方可用 `evaluated` 标记区分
+        # 「未评估（score 保持默认 0.0）」与「真实得分为 0.0」的候选。
+        # 进化算法（PromptBreeder / EVOPrompt）依赖此标记决定是否跳过评估。
+        prompt.score = final_score
+        prompt.evaluated = True
         return final_score
 
     def evaluate_batch(
