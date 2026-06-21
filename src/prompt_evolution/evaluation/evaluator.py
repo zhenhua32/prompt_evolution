@@ -25,14 +25,17 @@ class Evaluator(BaseEvaluator):
         self,
         metrics: Optional[List[_BaseMetric]] = None,
         model_provider: Optional[Any] = None,
+        concurrency: int = 5,
     ) -> None:
         """
         Args:
             metrics: 使用的指标列表，按 ``compute()`` 返回分数平均。
             model_provider: LLM 提供商（LLM-as-Judge 指标需要）。
+            concurrency: 单次评估内的并发请求数（与 baseline 对齐，默认 5）。
         """
         self._metrics = metrics or []
         self._model_provider = model_provider
+        self._concurrency: int = max(1, int(concurrency))
 
     # ------------------------------------------------------------------
     # BaseEvaluator 接口
@@ -108,31 +111,59 @@ class Evaluator(BaseEvaluator):
         dataset: List[Dict[str, Any]],
         provider: Any,
     ) -> List[str]:
-        """用给定 prompt 在数据集上生成所有预测。"""
-        predictions: List[str] = []
+        """用给定 prompt 在数据集上生成所有预测。
 
-        # 构造 few-shot 上下文（如果有）
+        修复要点（与 baseline ``benchmark_news.py::evaluate_prompt`` 对齐）：
+        1. **占位符替换**：若 ``prompt.instruction`` 含 ``{input}``，
+           用 ``replace("{input}", user_input)`` 把用户输入嵌入到 instruction
+           原位，保留 prompt 末尾的输出引导（如 ``\\n类别：``）。
+           不含占位符时退化为 instruction + 用户输入的拼接（向后兼容）。
+        2. **不传 system_prompt**：避免 instruction 在 system 和 user
+           两条消息里重复发送（双发会破坏输出格式引导、稀释信号）。
+        3. **并发**：用 ``asyncio.Semaphore`` 控制并发，与 baseline
+           的并发行为对齐，显著缩短 SPO/OPRO 耗时。
+        """
+        # 预渲染 few-shot 上下文（如果有）
         fewshot_context = ""
         for ex in prompt.demo_examples:
             role = ex.get("role", "user")
             content = ex.get("content", "")
             fewshot_context += f"{role}: {content}\n"
 
-        for item in dataset:
-            user_input = self._extract_input(item)
-            full_prompt = f"{prompt.instruction}\n\n{fewshot_context}用户输入：{user_input}"
-            try:
-                pred = await provider.generate(
-                    prompt=full_prompt,
-                    system_prompt=prompt.instruction,
-                    temperature=0.0,  # 评估时用确定性输出
-                    max_tokens=512,
-                )
-                predictions.append(pred.strip())
-            except Exception as exc:
-                logger.error("生成预测失败: {}", exc)
-                predictions.append("")
+        instruction = prompt.instruction
+        has_placeholder = "{input}" in instruction
 
+        semaphore = asyncio.Semaphore(self._concurrency)
+        predictions: List[str] = ["" for _ in dataset]
+
+        async def _predict(idx: int, item: Dict[str, Any]) -> None:
+            user_input = self._extract_input(item)
+            if has_placeholder:
+                # 路径 A：占位符替换 — 与 baseline 完全一致
+                full_prompt = instruction.replace("{input}", user_input)
+                if fewshot_context:
+                    # few-shot 加在 instruction 之前，避免破坏末尾输出引导
+                    full_prompt = f"{fewshot_context}\n{full_prompt}"
+            else:
+                # 路径 B：兜底拼接 — 兼容未使用占位符的 prompt
+                full_prompt = (
+                    f"{instruction}\n\n{fewshot_context}用户输入：{user_input}"
+                ).strip()
+
+            async with semaphore:
+                try:
+                    pred = await provider.generate(
+                        prompt=full_prompt,
+                        system_prompt=None,
+                        temperature=0.0,  # 评估时用确定性输出
+                        max_tokens=512,
+                    )
+                    predictions[idx] = pred.strip()
+                except Exception as exc:
+                    logger.error("生成预测失败 (idx={}): {}", idx, exc)
+                    predictions[idx] = ""
+
+        await asyncio.gather(*(_predict(i, item) for i, item in enumerate(dataset)))
         return predictions
 
     @staticmethod

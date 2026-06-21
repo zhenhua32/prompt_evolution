@@ -42,8 +42,9 @@ Semantic angles to try (pick one per rewrite):
 4. Change the level of detail (more/fewer constraints)
 5. Change the examples or framing
 
-CRITICAL: The rewritten prompt must still produce CORRECT outputs
-for the same task — only the wording/angle changes.
+CRITICAL CONSTRAINTS:
+- The rewritten prompt MUST still produce CORRECT outputs for the same task — only the wording/angle changes.
+- The rewritten prompt MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Keep it where the user's input should go (typically near the end, before the output cue).
 
 Output ONLY the rewritten prompt, wrapped in triple backticks:
 ```
@@ -64,6 +65,8 @@ the best prompt but explore a slightly DIFFERENT angle.
 
 The goal: find prompts in the "semantic neighborhood" of the best
 prompt that might score even higher.
+
+CRITICAL: Every candidate MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it.
 
 Output each candidate wrapped in triple backticks:
 ```
@@ -330,13 +333,14 @@ class SPOOptimizer(BaseOptimizer):
                         )
                     )
 
-        # 兜底：解析失败时返回原 prompt 的变体
+        # 兜底：解析失败时返回原 prompt 的变体。
+        # 变体标记放在 instruction 之前，避免破坏末尾输出引导（如 "\n类别："）。
         if not candidates:
             for i in range(self._num_candidates // self._num_angles + 1):
                 candidates.append(
                     PromptCandidate(
                         id=str(uuid.uuid4()),
-                        instruction=prompt.instruction + f" [semantic angle {angle}, var {i}]",
+                        instruction=f"[semantic angle {angle}, var {i}]\n{prompt.instruction}",
                         metadata={
                             "source": "spo_rewrite_fallback",
                             "angle": angle,

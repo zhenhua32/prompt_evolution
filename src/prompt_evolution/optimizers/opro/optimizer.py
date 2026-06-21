@@ -74,6 +74,7 @@ For each prompt you generate:
 - Make it clear, specific, and effective for the task
 - Include concrete instructions on output format when helpful
 - Vary your approach across candidates (some with examples, some with step-by-step reasoning, etc.)
+- CRITICAL: Every prompt MUST contain the literal placeholder {input} exactly once. This placeholder will be replaced with the actual user input at evaluation time. Position it where the user's input should go (e.g. after 'Input:' or at the end before the output cue). Do NOT remove, rename, or duplicate it.
 - Output each candidate prompt wrapped in triple backticks: ```<prompt>```
 - Generate the exact number of candidates requested
 """
@@ -359,15 +360,21 @@ class OPROOptimizer(BaseOptimizer):
                         )
                     )
 
-        # 如果解析出的候选不足，用初始 prompt 填充
+        # 如果解析出的候选不足，用含 {input} 占位符的安全模板填充。
+        # padding 不依赖 initial_prompt（_generate_candidates 签名里没有它），
+        # 但必须保证占位符存在，否则评估走兜底拼接路径，效果被污染。
+        # 变体标记放在 instruction 之前，避免破坏末尾输出引导。
+        _padding_template = (
+            "You are a helpful assistant. Read the input carefully and "
+            "respond with the expected output only.\n\n"
+            "Input: {input}\n"
+            "Output:"
+        )
         while len(candidates) < self._num_candidates:
             candidates.append(
                 PromptCandidate(
                     id=str(uuid.uuid4()),
-                    instruction=(
-                        f"Improved version of previous prompt. "
-                        f"(iteration {iteration}, fill {len(candidates) + 1})"
-                    ),
+                    instruction=f"[OPRO iteration {iteration} fill {len(candidates) + 1}]\n{_padding_template}",
                     metadata={"source": "opro_padding", "iteration": iteration},
                 )
             )

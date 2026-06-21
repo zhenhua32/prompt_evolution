@@ -51,6 +51,15 @@ class APEOptimizer(BaseOptimizer):
             "Your task is to write the BEST possible instruction prompt "
             "for the given task. Make it clear, specific, and effective.",
         )
+        # 约束 LLM 在改写 prompt 时保留 {input} 占位符（评估时用于替换实际输入）
+        self._placeholder_constraint: str = self.config.get(
+            "placeholder_constraint",
+            "IMPORTANT: The prompt MUST contain the literal placeholder {input} "
+            "exactly once — this placeholder will be replaced with the actual "
+            "user input at evaluation time. Do NOT remove or rename it. "
+            "Position it where the user's input should go "
+            "(e.g. after 'Input:' or at the end of the prompt).",
+        )
 
     # ------------------------------------------------------------------
     # BaseOptimizer 接口
@@ -165,6 +174,7 @@ class APEOptimizer(BaseOptimizer):
             f"{self._prompt_gen_system}\n\n"
             f"以下是任务的若干示例：\n\n{dataset_sample}"
             f"当前使用的 prompt 是：\n```\n{initial_prompt.instruction}\n```\n\n"
+            f"{self._placeholder_constraint}\n\n"
             f"请生成 {self._num_candidates} 条**不同风格**的改进版 prompt。"
             f"每条 prompt 用 ``` 包裹，编号 1 ~ {self._num_candidates}。"
         )
@@ -205,12 +215,13 @@ class APEOptimizer(BaseOptimizer):
                     )
                 )
 
-        # 如果解析出的候选不足，用初始 prompt 填充
+        # 如果解析出的候选不足，用初始 prompt 填充。
+        # 变体标记放在 instruction 之前，避免破坏末尾的输出引导（如 "\n类别："）。
         while len(candidates) < self._num_candidates:
             candidates.append(
                 PromptCandidate(
                     id=str(uuid.uuid4()),
-                    instruction=initial_prompt.instruction + f" (variant {len(candidates) + 1})",
+                    instruction=f"[variant {len(candidates) + 1}]\n{initial_prompt.instruction}",
                     metadata={"source": "ape_padding", "iteration": iteration},
                 )
             )
