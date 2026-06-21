@@ -46,6 +46,8 @@ Given a prompt, rewrite it with ONE of the following mutations:
 4. Make the output format specification more explicit
 5. Adjust the tone or persona to better match the task
 
+CRITICAL: The mutated prompt MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Keep it where the user's input should go (typically near the end, before the output cue).
+
 Output ONLY the mutated prompt, wrapped in triple backticks:
 ```
 <mutated prompt>
@@ -65,6 +67,8 @@ Guidelines:
 - Retain useful examples or constraints from both
 - The result should be coherent, not a拼接 of two halves
 
+CRITICAL: The crossed-over prompt MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Keep it where the user's input should go (typically near the end, before the output cue).
+
 Output ONLY the crossed-over prompt, wrapped in triple backticks:
 ```
 <crossed-over prompt>
@@ -79,6 +83,8 @@ Given a base prompt, produce a variant that:
 - Expresses the same core intent
 - Uses different wording, structure, or emphasis
 - May add / remove examples or formatting instructions
+
+CRITICAL: The variant prompt MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Keep it where the user's input should go (typically near the end, before the output cue).
 
 Output ONLY the variant prompt, wrapped in triple backticks:
 ```
@@ -362,13 +368,13 @@ class EVOPromptOptimizer(BaseOptimizer):
                         )
                     )
 
-        # 不足时用简单变体填充
+        # 不足时用简单变体填充。
+        # 变体标记放在 instruction 之前，避免破坏末尾输出引导（如 "\n类别："）。
         while len(candidates) < num_variants:
             candidates.append(
                 PromptCandidate(
                     id=str(uuid.uuid4()),
-                    instruction=base_prompt.instruction
-                    + f" [variant {len(candidates) + 1}]",
+                    instruction=f"[variant {len(candidates) + 1}]\n{base_prompt.instruction}",
                     metadata={"source": "evoprompt_pad", "iteration": 0},
                 )
             )

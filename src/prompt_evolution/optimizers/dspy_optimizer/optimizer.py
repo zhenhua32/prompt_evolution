@@ -34,6 +34,8 @@ You will be given:
 Your job: Propose NEW instructions that could improve performance.
 Focus on clarity, specificity, and alignment with the examples.
 
+CRITICAL: Every proposed instruction MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Position it where the user's input should go (typically near the end, before the output cue).
+
 Output each candidate instruction wrapped in triple backticks:
 ```
 <instruction>
@@ -243,30 +245,51 @@ class DSPyOptimizer(BaseOptimizer):
         """Bootstrap 阶段：用当前 prompt 在数据集上推理，收集正确样本作为 few-shot。
 
         返回 list of ``{"input": ..., "output": ...}``。
+
+        修复要点（与 evaluator 评估链路对齐）：
+        1. 不再调用不存在的 ``agenerate(messages=...)``，改用
+           ``generate(prompt=..., system_prompt=None, ...)``，与
+           ``BaseModelProvider`` / ``LiteLLMProvider`` 接口一致。
+        2. 占位符替换：若 ``instruction`` 含 ``{input}``，走
+           ``instruction.replace("{input}", inp)``，与 evaluator 和
+           baseline 完全对齐 —— 这样 bootstrap 收集的"正确样本"
+           才能真实反映当前 prompt 在评估链路下的表现。
+        3. 不再传 ``system_prompt=prompt.instruction``，避免
+           instruction 在 system 和 user 两条消息里重复（双发会
+           破坏输出格式引导）。
         """
         import random
 
         random.seed(42)
         sampled = random.sample(dataset, min(num_samples, len(dataset)))
 
+        instruction = prompt.instruction
+        has_placeholder = "{input}" in instruction
+
         few_shots: List[Dict[str, str]] = []
         for item in sampled:
             inp = item.get("input", item.get("question", ""))
             tgt = item.get("target", item.get("answer", ""))
 
-            # 用当前 prompt 推理
+            # 与 evaluator 评估链路对齐：占位符替换或兜底拼接
+            if has_placeholder:
+                full_prompt = instruction.replace("{input}", inp)
+            else:
+                full_prompt = f"{instruction}\n\n用户输入：{inp}"
+
             try:
-                messages = [
-                    {"role": "system", "content": prompt.instruction},
-                    {"role": "user", "content": inp},
-                ]
-                response = await self.model_provider.agenerate(messages=messages, temperature=0.0)
-                pred = response.choices[0].message.content.strip()
+                response = await self.model_provider.generate(
+                    prompt=full_prompt,
+                    system_prompt=None,
+                    temperature=0.0,
+                    max_tokens=512,
+                )
+                pred = response.strip()
             except Exception as exc:
-                logger.warning("DSPy bootstrap prediction failed: {exc}")
+                logger.warning("DSPy bootstrap prediction failed: {}", exc)
                 pred = ""
 
-            # 简单匹配：完全匹配或包含正确答案即视为正确（可配置 metric）
+            # 简单匹配：完全匹配或包含正确答案即视为正确
             if pred == tgt or tgt in pred:
                 few_shots.append({"input": inp, "output": tgt})
 
@@ -346,12 +369,13 @@ class DSPyOptimizer(BaseOptimizer):
                         )
                     )
 
-        # 填充不足
+        # 填充不足。
+        # 变体标记放在 instruction 之前，避免破坏末尾输出引导（如 "\n类别："）。
         while len(candidates) < self._num_candidates:
             candidates.append(
                 PromptCandidate(
                     id=str(uuid.uuid4()),
-                    instruction=current_best_instruction + f" (variation {len(candidates) + 1})",
+                    instruction=f"(variation {len(candidates) + 1})\n{current_best_instruction}",
                     metadata={"source": "dspy_padding", "iteration": iteration},
                 )
             )

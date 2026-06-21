@@ -46,6 +46,8 @@ Mutation strategies (pick one or combine several):
 - Adjust the tone (more formal / more casual)
 - Add a brief example if missing
 
+CRITICAL: The mutated prompt MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Keep it where the user's input should go (typically near the end, before the output cue).
+
 Output ONLY the mutated prompt text, wrapped in triple backticks:
 ```
 <mutated prompt>
@@ -64,6 +66,8 @@ Crossover strategy:
 - Keep the most effective constraints from each
 - Resolve contradictions by picking the clearer wording
 
+CRITICAL: The crossed-over prompt MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Keep it where the user's input should go (typically near the end, before the output cue).
+
 Output ONLY the crossed-over prompt, wrapped in triple backticks:
 ```
 <crossed-over prompt>
@@ -75,6 +79,8 @@ _INIT_VARIANT_SYSTEM = """You are generating variant prompts for an evolutionary
 
 Given a base prompt, generate a variant that expresses the same
 intent but with different wording, structure, or emphasis.
+
+CRITICAL: The variant prompt MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Keep it where the user's input should go (typically near the end, before the output cue).
 
 Output ONLY the variant prompt, wrapped in triple backticks:
 ```
@@ -337,12 +343,13 @@ class PromptBreederOptimizer(BaseOptimizer):
                         )
                     )
 
-        # 如果变体不足，用简单变体填充
+        # 如果变体不足，用简单变体填充。
+        # 变体标记放在 instruction 之前，避免破坏末尾输出引导（如 "\n类别："）。
         while len(candidates) < num_variants:
             candidates.append(
                 PromptCandidate(
                     id=str(uuid.uuid4()),
-                    instruction=base_prompt.instruction + f" (variant {len(candidates) + 1})",
+                    instruction=f"(variant {len(candidates) + 1})\n{base_prompt.instruction}",
                     metadata={"source": "breeder_padding", "iteration": 0},
                 )
             )
