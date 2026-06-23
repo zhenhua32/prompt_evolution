@@ -40,7 +40,7 @@ def _make_provider_with_magic_behavior() -> MagicMock:
 
     async def _generate(prompt: str = "", system_prompt: str = None, **kwargs: Any) -> str:
         if system_prompt is not None:
-            return f"```\n你是专家。关键词MAGIC。新闻：{{input}}\n类别：\n```"
+            return "```\n你是专家。关键词MAGIC。新闻：{input}\n类别：\n```"
         return "正确类别" if "MAGIC" in prompt else "错误类别"
 
     provider.generate = AsyncMock(side_effect=_generate)
@@ -159,6 +159,67 @@ class TestPromptBreeder:
         assert result.total_cost_usd >= 0
         # 上界：调用次数 * 0.01（每调用增加 0.01）+ 一点点容差
         assert result.total_cost_usd < call_count[0] * 0.02 + 1.0
+
+    @pytest.mark.asyncio()
+    async def test_children_are_scored_before_selection(self) -> None:
+        """高分子代必须先评分，才能进入下一轮继续进化。
+
+        旧实现里，子代先以默认 score=0.0 参与截断，可能当轮就被淘汰；
+        修复后，第一轮产生的 STAGE1 会保留为精英，第二轮才能继续进化出 STAGE2。
+        """
+        provider = MagicMock(spec=LiteLLMProvider)
+        provider.total_cost_usd = 0.0
+
+        async def _generate(
+            prompt: str = "", system_prompt: str = None, **kwargs: Any
+        ) -> str:
+            if system_prompt is None:
+                return ""
+            if "STAGE1" in prompt:
+                return "```\nSTAGE2 {input}\n```"
+            return "```\nSTAGE1 {input}\n```"
+
+        provider.generate = AsyncMock(side_effect=_generate)
+
+        evaluator = MagicMock(spec=Evaluator)
+
+        async def _evaluate(
+            prompt: PromptCandidate,
+            dataset: List[Dict[str, Any]],
+            model_provider: Any,
+        ) -> float:
+            score_map = {
+                "BASE {input}": 0.1,
+                "STAGE1 {input}": 0.6,
+                "STAGE2 {input}": 1.0,
+            }
+            score = score_map[prompt.instruction]
+            prompt.score = score
+            prompt.evaluated = True
+            return score
+
+        evaluator.evaluate = AsyncMock(side_effect=_evaluate)
+
+        optimizer = PromptBreederOptimizer(
+            model_provider=provider,
+            evaluator=evaluator,
+            config={
+                "population_size": 1,
+                "init_variants": 0,
+                "mutation_rate": 1.0,
+                "crossover_rate": 0.0,
+                "elite_ratio": 1.0,
+            },
+        )
+
+        result = await optimizer.optimize(
+            initial_prompt=PromptCandidate(id="initial", instruction="BASE {input}"),
+            dataset=_make_dataset(1),
+            max_iterations=2,
+        )
+
+        assert result.best_prompt.instruction == "STAGE2 {input}"
+        assert result.best_prompt.score == 1.0
 
 
 # ---------------------------------------------------------------------------

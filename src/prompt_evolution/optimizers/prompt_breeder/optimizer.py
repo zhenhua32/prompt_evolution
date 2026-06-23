@@ -25,11 +25,11 @@ from __future__ import annotations
 
 import random
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from prompt_evolution.core.base import BaseOptimizer
+from prompt_evolution.core.base import BaseEvaluator, BaseModelProvider, BaseOptimizer
 from prompt_evolution.core.models import OptimizationResult, PromptCandidate
 
 
@@ -118,8 +118,8 @@ class PromptBreederOptimizer(BaseOptimizer):
 
     def __init__(
         self,
-        model_provider: "BaseModelProvider",
-        evaluator: "BaseEvaluator",
+        model_provider: BaseModelProvider,
+        evaluator: BaseEvaluator,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__(model_provider=model_provider, evaluator=evaluator, config=config)
@@ -197,16 +197,6 @@ class PromptBreederOptimizer(BaseOptimizer):
             elite_size = max(1, int(len(population) * self._elite_ratio))
             elites = population[:elite_size]
 
-            logger.info(
-                "PromptBreeder iteration {}/{}: population={}, best_score={:.4f}, "
-                "avg_score={:.4f}",
-                iteration,
-                max_iterations,
-                len(population),
-                population[0].score or 0.0,
-                sum(c.score or 0.0 for c in population) / max(len(population), 1),
-            )
-
             # 3. 生成子代
             children: List[PromptCandidate] = []
 
@@ -226,6 +216,22 @@ class PromptBreederOptimizer(BaseOptimizer):
                         )
                         children.append(child)
 
+            # 在选择 / 淘汰前立即评估子代。
+            # 否则新子代会带着默认 score=0.0 进入排序，常在本轮就被截断掉，
+            # 根本无法进入下一轮作为精英继续进化。
+            for candidate in children:
+                score = await self.evaluator.evaluate(
+                    prompt=candidate,
+                    dataset=dataset,
+                    model_provider=self.model_provider,
+                )
+                candidate.score = score
+                logger.debug(
+                    "PromptBreeder child '{}' score={:.4f}",
+                    candidate.id[:8],
+                    score,
+                )
+
             # 4. 更新种群
             population.extend(children)
             all_candidates.extend(children)
@@ -234,15 +240,30 @@ class PromptBreederOptimizer(BaseOptimizer):
             population.sort(key=lambda c: c.score, reverse=True)
             population = population[: self._population_size]
 
+            best_after_selection = population[0]
+            avg_after_selection = sum(c.score or 0.0 for c in population) / max(
+                len(population), 1
+            )
+
+            logger.info(
+                "PromptBreeder iteration {}/{}: population={}, children={}, best_score={:.4f}, "
+                "avg_score={:.4f}",
+                iteration,
+                max_iterations,
+                len(population),
+                len(children),
+                best_after_selection.score or 0.0,
+                avg_after_selection,
+            )
+
             # 记录历史
             history.append({
                 "iteration": iteration,
                 "population_size": len(population),
                 "num_children": len(children),
-                "best_score": population[0].score or 0.0,
-                "avg_score": sum(c.score or 0.0 for c in population)
-                / max(len(population), 1),
-                "best_prompt_id": population[0].id,
+                "best_score": best_after_selection.score or 0.0,
+                "avg_score": avg_after_selection,
+                "best_prompt_id": best_after_selection.id,
             })
 
             self.on_iteration_end(iteration, children)
