@@ -24,33 +24,31 @@ from prompt_evolution.core.models import OptimizationResult, PromptCandidate
 
 
 # 候选指令生成 system prompt
-_PROPOSE_SYSTEM = """You are an expert prompt engineer optimizing instructions for an LLM task.
-
-You will be given:
-- A task description
-- A few-shot example (input-output pairs)
-- The current best instruction so far
-
-Your job: Propose NEW instructions that could improve performance.
-Focus on clarity, specificity, and alignment with the examples.
-
-CRITICAL: Every proposed instruction MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Position it where the user's input should go (typically near the end, before the output cue).
-
-Output each candidate instruction wrapped in triple backticks:
-```
-<instruction>
-```
-
-Generate exactly the number of candidates requested.
-"""
+# P0-2 / P1-1 修复：中文化 + 强制保留输出格式约束
+_PROPOSE_SYSTEM = (
+    '你是一位资深 Prompt 工程师，负责为 LLM 任务优化指令 Prompt。\n\n'
+    '你将获得：\n'
+    '- 任务描述\n'
+    '- 若干 few-shot 示例（输入-输出对）\n'
+    '- 当前最优指令\n\n'
+    '你的任务：提出能够提升性能的新指令。聚焦于清晰度、具体性、与示例的对齐。\n\n'
+    '重要约束（必须遵守）：\n'
+    '- 每条指令必须原样保留字面占位符 {input}（仅一次），评估时会替换为实际用户输入，不得删除、改名或重复\n'
+    '- 必须原样保留原 Prompt 的输出格式约束（如「只输出类别名称」）和末尾输出引导（如「类别：」）\n'
+    '- 不得添加「请逐步分析」「step by step」等推理引导，输出必须是裸答案\n'
+    '- 每条候选用三反引号包裹：\n'
+    '```\n'
+    '<instruction>\n'
+    '```\n\n'
+    '生成指定数量的候选。\n'
+)
 
 # Bootstrap few-shot 构建 prompt
-_BOOTSTRAP_SYSTEM = """You are helping build a high-quality dataset.
-
-Given an input and the expected output, write a clear instruction that tells an LLM how to produce the output from the input.
-
-Output ONLY the instruction text, no explanation.
-"""
+_BOOTSTRAP_SYSTEM = (
+    '你正在帮助构建高质量数据集。\n\n'
+    '给定输入和期望输出，撰写一条清晰的指令，告诉 LLM 如何从输入产生该输出。\n\n'
+    '只输出指令文本，不要解释。\n'
+)
 
 
 class DSPyOptimizer(BaseOptimizer):
@@ -227,15 +225,31 @@ class DSPyOptimizer(BaseOptimizer):
     # ------------------------------------------------------------------
 
     def _build_task_description(self, dataset: List[Dict[str, Any]]) -> str:
-        """从数据集前 3 条构建任务描述。"""
+        """从数据集构建任务描述（P2-2 修复：分层覆盖多类别）。"""
         parts: List[str] = [
-            "Task: Given an input, generate the expected output.\n",
-            "Example input-output pairs:\n",
+            "任务：给定输入，生成对应的期望输出。\n",
+            "示例输入-输出对：\n",
         ]
-        for i, item in enumerate(dataset[:3]):
+        # P2-2 修复：旧实现用 dataset[:3]，本项目数据集前 3 条全是"财经"类。
+        # 现按 target 分组轮询采样，覆盖尽量多的类别。
+        from collections import OrderedDict
+
+        groups: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict()
+        for item in dataset:
+            tgt = str(item.get("target", item.get("answer", "")))
+            groups.setdefault(tgt, []).append(item)
+
+        sampled: List[Dict[str, Any]] = []
+        for tgt, items in groups.items():
+            if items:
+                sampled.append(items[0])
+            if len(sampled) >= 6:
+                break
+
+        for i, item in enumerate(sampled):
             inp = item.get("input", item.get("question", ""))
             tgt = item.get("target", item.get("answer", ""))
-            parts.append(f"  Example {i + 1}: Input=`{inp}` → Output=`{tgt}`\n")
+            parts.append(f"  示例 {i + 1}: 输入=`{inp}` → 输出=`{tgt}`\n")
         return "".join(parts)
 
     async def _bootstrap(
@@ -292,8 +306,11 @@ class DSPyOptimizer(BaseOptimizer):
                 logger.warning("DSPy bootstrap prediction failed: {}", exc)
                 pred = ""
 
-            # 简单匹配：完全匹配或包含正确答案即视为正确
-            if pred == tgt or tgt in pred:
+            # P2-4 修复：旧实现 `pred == tgt or tgt in pred` 过松——
+            # 若 pred="该新闻属于财经类别"、tgt="财经"，`tgt in pred` 为真，
+            # 会把格式错误的样本当作"正确 few-shot"收集，喂给 LLM 生成新候选时
+            # 强化错误输出格式，形成恶性循环。现改为严格相等（与 AccuracyMetric 一致）。
+            if pred.strip().lower() == tgt.strip().lower():
                 few_shots.append({"input": inp, "output": tgt})
 
         return few_shots
@@ -310,27 +327,26 @@ class DSPyOptimizer(BaseOptimizer):
 
         # 构造 propose prompt
         parts: List[str] = []
-        parts.append("## Task Description\n")
+        parts.append("## 任务描述\n")
         parts.append(task_description)
         parts.append("\n")
 
         if few_shots:
-            parts.append("## Few-Shot Examples (correct input-output pairs)\n")
+            parts.append("## Few-Shot 示例（正确的输入-输出对）\n")
             for i, ex in enumerate(few_shots[:5]):
-                parts.append(f"  Example {i + 1}:\n")
-                parts.append(f"    Input: {ex['input']}\n")
-                parts.append(f"    Output: {ex['output']}\n")
+                parts.append(f"  示例 {i + 1}:\n")
+                parts.append(f"    输入: {ex['input']}\n")
+                parts.append(f"    输出: {ex['output']}\n")
             parts.append("\n")
 
-        parts.append("## Current Best Instruction\n")
+        parts.append("## 当前最优指令\n")
         parts.append(f"```\n{current_best_instruction}\n```\n\n")
 
         parts.append(
-            f"## Your Job\n"
-            f"Propose {self._num_candidates} NEW and IMPROVED instructions "
-            f"based on the task and examples above.\n"
-            f"Each should be different and aim to improve performance.\n"
-            f"Wrap each candidate in triple backticks: ```<instruction>```\n"
+            f"## 你的任务\n"
+            f"基于上述任务和示例，提出 {self._num_candidates} 条新的、更优的指令。\n"
+            f"每条应有差异，并力求提升性能。\n"
+            f"每条候选用三反引号包裹：```<instruction>```\n"
         )
 
         propose_prompt = "".join(parts)
@@ -372,13 +388,13 @@ class DSPyOptimizer(BaseOptimizer):
                         )
                     )
 
-        # 填充不足。
-        # 变体标记放在 instruction 之前，避免破坏末尾输出引导（如 "\n类别："）。
+        # P2-3 修复：padding 不再加 (variation n) 前缀，直接复用 current_best_instruction，
+        # 避免前缀污染破坏 prompt 开头的角色认知。
         while len(candidates) < self._num_candidates:
             candidates.append(
                 PromptCandidate(
                     id=str(uuid.uuid4()),
-                    instruction=f"(variation {len(candidates) + 1})\n{current_best_instruction}",
+                    instruction=current_best_instruction,
                     metadata={"source": "dspy_padding", "iteration": iteration},
                 )
             )

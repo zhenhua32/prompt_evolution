@@ -36,61 +36,63 @@ from prompt_evolution.core.models import OptimizationResult, PromptCandidate
 
 
 # 变异算子 system prompt（针对性改写）
-_MUTATION_SYSTEM = """\
-You are an expert prompt mutation operator.
-
-Given a prompt, rewrite it with ONE of the following mutations:
-1. Rephrase the core instruction more clearly
-2. Add a concrete example or constraint
-3. Remove redundant or confusing wording
-4. Make the output format specification more explicit
-5. Adjust the tone or persona to better match the task
-
-CRITICAL: The mutated prompt MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Keep it where the user's input should go (typically near the end, before the output cue).
-
-Output ONLY the mutated prompt, wrapped in triple backticks:
-```
-<mutated prompt>
-```
-"""
+# P0-2 / P1-1 / P1-3 修复：中文化 + 弱化对输出格式的破坏 + 强制保留格式约束
+_MUTATION_SYSTEM = (
+    '你是一位资深 Prompt 变异算子。\n\n'
+    '给定一个 Prompt，用以下变异方式之一改写：\n'
+    '1. 更清晰地重新表述核心指令\n'
+    '2. 增加具体的示例或约束\n'
+    '3. 删除冗余或令人困惑的措辞\n'
+    '4. 调整语气或角色以更好地匹配任务\n'
+    '（注意：不得改变输出格式）\n\n'
+    '重要约束（必须遵守）：\n'
+    '- 变异后的 Prompt 必须原样保留字面占位符 {input}（仅一次），评估时会替换为实际用户输入，不得删除、改名或重复\n'
+    '- 必须原样保留原 Prompt 的输出格式约束（如「只输出类别名称」）和末尾输出引导（如「类别：」）\n'
+    '- 不得改变输出格式，不得添加「请逐步分析」「step by step」等推理引导\n'
+    '- 输出必须是裸答案，不带任何前缀或解释\n\n'
+    '只输出变异后的 Prompt，用三反引号包裹：\n'
+    '```\n'
+    '<变异后的 prompt>\n'
+    '```\n'
+)
 
 # 交叉算子 system prompt（融合两条 prompt）
-_CROSSOVER_SYSTEM = """\
-You are a prompt crossover operator.
-
-Given two parent prompts A and B, produce ONE new prompt that
-intelligently combines the best parts of both.
-
-Guidelines:
-- Keep the clearest instruction from either parent
-- Merge output format specs (resolve conflicts by picking the clearer one)
-- Retain useful examples or constraints from both
-- The result should be coherent, not a拼接 of two halves
-
-CRITICAL: The crossed-over prompt MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Keep it where the user's input should go (typically near the end, before the output cue).
-
-Output ONLY the crossed-over prompt, wrapped in triple backticks:
-```
-<crossed-over prompt>
-```
-"""
+# P0-2 / P1-1 修复：中文化 + 强制保留格式约束
+_CROSSOVER_SYSTEM = (
+    '你是一个 Prompt 交叉算子。\n\n'
+    '给定两个父代 Prompt A 和 B，生成 ONE 个智能融合两者优点的新 Prompt。\n\n'
+    '指引：\n'
+    '- 取任一父代中最清晰的指令\n'
+    '- 合并输出格式约束（冲突时选更清晰的一方）\n'
+    '- 保留两者有用的示例或约束\n'
+    '- 结果应连贯，不是两半的拼接\n\n'
+    '重要约束（必须遵守）：\n'
+    '- 交叉后的 Prompt 必须原样保留字面占位符 {input}（仅一次），评估时会替换为实际用户输入，不得删除、改名或重复\n'
+    '- 必须原样保留原 Prompt 的输出格式约束（如「只输出类别名称」）和末尾输出引导（如「类别：」）\n'
+    '- 不得改变输出格式，不得添加「请逐步分析」「step by step」等推理引导\n\n'
+    '只输出交叉后的 Prompt，用三反引号包裹：\n'
+    '```\n'
+    '<交叉后的 prompt>\n'
+    '```\n'
+)
 
 # 初始化种群时的变体生成（多样性启动）
-_INIT_VARIANT_SYSTEM = """\
-You are generating diverse prompt variants for evolutionary search.
-
-Given a base prompt, produce a variant that:
-- Expresses the same core intent
-- Uses different wording, structure, or emphasis
-- May add / remove examples or formatting instructions
-
-CRITICAL: The variant prompt MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Keep it where the user's input should go (typically near the end, before the output cue).
-
-Output ONLY the variant prompt, wrapped in triple backticks:
-```
-<variant prompt>
-```
-"""
+# P0-2 / P1-1 修复：中文化 + 强制保留格式约束
+_INIT_VARIANT_SYSTEM = (
+    '你正在为进化搜索生成多样化的 Prompt 变体。\n\n'
+    '给定一个基础 Prompt，生成一个变体：\n'
+    '- 表达相同的核心意图\n'
+    '- 使用不同的措辞、结构或侧重点\n'
+    '- 可增减示例或格式说明（但不得改变输出格式约束）\n\n'
+    '重要约束（必须遵守）：\n'
+    '- 变体 Prompt 必须原样保留字面占位符 {input}（仅一次），评估时会替换为实际用户输入，不得删除、改名或重复\n'
+    '- 必须原样保留原 Prompt 的输出格式约束（如「只输出类别名称」）和末尾输出引导（如「类别：」）\n'
+    '- 不得改变输出格式，不得添加「请逐步分析」「step by step」等推理引导\n\n'
+    '只输出变体 Prompt，用三反引号包裹：\n'
+    '```\n'
+    '<变体 prompt>\n'
+    '```\n'
+)
 
 
 class EVOPromptOptimizer(BaseOptimizer):
@@ -361,9 +363,9 @@ class EVOPromptOptimizer(BaseOptimizer):
         import re
 
         prompt_text = (
-            f"Base prompt:\n```\n{base_prompt.instruction}\n```\n\n"
-            f"Generate {num_variants} semantically DIFFERENT variant prompts.\n"
-            f"Each must wrap in triple backticks: ```<variant>```"
+            f"基础 Prompt:\n```\n{base_prompt.instruction}\n```\n\n"
+            f"生成 {num_variants} 个语义上不同的变体 Prompt。\n"
+            f"每个必须用三反引号包裹：```<变体>```"
         )
 
         response = await self.model_provider.generate(
@@ -389,13 +391,13 @@ class EVOPromptOptimizer(BaseOptimizer):
                         )
                     )
 
-        # 不足时用简单变体填充。
-        # 变体标记放在 instruction 之前，避免破坏末尾输出引导（如 "\n类别："）。
+        # P2-3 修复：padding 不再加 [variant n] 前缀，直接复用 base_prompt.instruction，
+        # 避免前缀污染破坏 prompt 开头的角色认知。
         while len(candidates) < num_variants:
             candidates.append(
                 PromptCandidate(
                     id=str(uuid.uuid4()),
-                    instruction=f"[variant {len(candidates) + 1}]\n{base_prompt.instruction}",
+                    instruction=base_prompt.instruction,
                     metadata={"source": "evoprompt_pad", "iteration": 0},
                 )
             )
@@ -409,8 +411,8 @@ class EVOPromptOptimizer(BaseOptimizer):
         import re
 
         prompt_text = (
-            f"Parent prompt:\n```\n{parent.instruction}\n```\n\n"
-            f"Mutate this prompt to create ONE improved variant."
+            f"父代 Prompt:\n```\n{parent.instruction}\n```\n\n"
+            f"变异这个 Prompt，生成 ONE 个改进的变体。"
         )
 
         response = await self.model_provider.generate(
@@ -444,9 +446,9 @@ class EVOPromptOptimizer(BaseOptimizer):
         import re
 
         prompt_text = (
-            f"Parent A:\n```\n{parent_a.instruction}\n```\n\n"
-            f"Parent B:\n```\n{parent_b.instruction}\n```\n\n"
-            f"Combine these two prompts into ONE improved prompt."
+            f"父代 A:\n```\n{parent_a.instruction}\n```\n\n"
+            f"父代 B:\n```\n{parent_b.instruction}\n```\n\n"
+            f"将这两个 Prompt 融合为 ONE 个改进的 Prompt。"
         )
 
         response = await self.model_provider.generate(

@@ -28,56 +28,56 @@ from prompt_evolution.core.models import OptimizationResult, PromptCandidate
 
 
 # 默认 meta-prompt 模板（instruction 部分）
-_DEFAULT_META_INSTRUCTION = """You are an expert prompt optimizer.
+# P0-2 / P1-1 修复：中文化 + 引导 LLM 保留输出格式约束
+_DEFAULT_META_INSTRUCTION = """你是一位资深 Prompt 优化专家。
 
-Your task is to analyze the prompts and their scores below, then generate NEW prompts that are likely to achieve higher scores.
+你的任务是分析下方已尝试的 Prompt 及其得分，然后生成更可能获得更高得分的新 Prompt。
 
-Scoring: higher is better (0.0 = worst, 1.0 = perfect).
+评分规则：越高越好（0.0 = 最差，1.0 = 完美）。
 
-Guidelines for generating better prompts:
-- Analyze what makes high-scoring prompts effective
-- Keep prompts clear, specific, and actionable
-- Avoid copying existing prompts verbatim — improve them
-- Consider different angles: clarity, structure, examples, constraints
+生成更优 Prompt 的要点：
+- 分析高分 Prompt 为什么有效
+- 保持 Prompt 清晰、具体、可执行
+- 不要照抄已有 Prompt，要真正改进
+- 可从清晰度、结构、约束、示例等角度切入
+- 重要：不得破坏原 Prompt 的输出格式约束和末尾输出引导
 """
 
 # 默认 meta-prompt 的 few-shot 示例（放在 history 之前，帮助 LLM 理解格式）
-_DEFAULT_META_FEWSHOT = """Here are some examples of good optimization:
-
-Example history:
-```
-Score: 0.92
-Prompt: "You are a helpful math tutor. Solve the problem step by step, showing all work."
-```
-→
-```
-Score: 0.95
-Prompt: "You are a patient math tutor. Solve each problem step by step with clear explanations. Show your reasoning before giving the final answer."
-```
-
-Example history:
-```
-Score: 0.45
-Prompt: "Answer the question."
-```
-→
-```
-Score: 0.68
-Prompt: "Read the question carefully. Think step by step. Provide your final answer in the format: #### <answer>"
-```
-"""
+# P1-1 修复：旧实现是英文数学辅导示例（"step by step"），与中文分类任务完全无关
+# 且会诱导 LLM 生成 CoT 风格 prompt，破坏裸输出要求。现替换为同领域分类示例。
+_DEFAULT_META_FEWSHOT = (
+    '以下是优化的示例（中文分类任务）：\n\n'
+    '示例历史：\n'
+    '```\n'
+    '得分: 0.83\n'
+    'Prompt: "你是新闻分类专家。根据新闻标题判断属于以下哪个类别：科技、股票、体育、娱乐、时政、社会、教育、财经、家居、游戏、房产、时尚、彩票、星座。只输出类别名称，不要输出任何其他内容。新闻标题：\\"{input}\\" 类别："\n'
+    '```\n\n'
+    '```\n'
+    '得分: 0.88\n'
+    'Prompt: "你是资深新闻编辑。请从下列14个类别中选出最贴切的一个：科技、股票、体育、娱乐、时政、社会、教育、财经、家居、游戏、房产、时尚、彩票、星座。仅输出类别名，不要解释。新闻标题：\\"{input}\\" 类别："\n'
+    '```\n\n'
+    '反例（得分低，格式被破坏）：\n'
+    '```\n'
+    '得分: 0.45\n'
+    'Prompt: "请分析这则新闻并给出分类。新闻标题：\\"{input}\\""\n'
+    '```\n'
+    '（错误原因：没有"只输出类别名"约束，没有末尾"类别："引导，模型会输出长篇分析）\n'
+)
 
 # 候选 prompt 生成时的 system prompt
-_CANDIDATE_GEN_SYSTEM = """You are an expert prompt engineer tasked with writing optimized instruction prompts.
-
-For each prompt you generate:
-- Make it clear, specific, and effective for the task
-- Include concrete instructions on output format when helpful
-- Vary your approach across candidates (some with examples, some with step-by-step reasoning, etc.)
-- CRITICAL: Every prompt MUST contain the literal placeholder {input} exactly once. This placeholder will be replaced with the actual user input at evaluation time. Position it where the user's input should go (e.g. after 'Input:' or at the end before the output cue). Do NOT remove, rename, or duplicate it.
-- Output each candidate prompt wrapped in triple backticks: ```<prompt>```
-- Generate the exact number of candidates requested
-"""
+# P0-2 修复：强制保留 {input} 占位符 + 原始输出格式约束 + 末尾输出引导
+_CANDIDATE_GEN_SYSTEM = (
+    '你是资深 Prompt 工程师，负责撰写优化后的指令 Prompt。\n\n'
+    '每条 Prompt 必须遵守：\n'
+    '- 清晰、具体、对任务有效\n'
+    '- 必须原样保留字面占位符 {input}（仅一次），评估时会替换为实际用户输入\n'
+    '- 必须原样保留原 Prompt 的输出格式约束（如「只输出类别名称」）和末尾输出引导（如「类别：」）\n'
+    '- 不得添加「请逐步分析」「step by step」等推理引导，输出必须是裸答案\n'
+    '- 不同候选之间要有差异化（角色、措辞、约束角度等）\n'
+    '- 每条候选用三反引号包裹：```<prompt>```\n'
+    '- 生成指定数量的候选\n'
+)
 
 
 class OPROOptimizer(BaseOptimizer):
@@ -250,17 +250,34 @@ class OPROOptimizer(BaseOptimizer):
     # ------------------------------------------------------------------
 
     def _build_task_description(self, dataset: List[Dict[str, Any]]) -> str:
-        """从数据集前几条样本构建任务描述。"""
+        """从数据集构建任务描述（P2-2 修复：分层覆盖多类别）。"""
         desc_parts: List[str] = [
-            "Task: Given an input, generate the expected output.\n",
-            "Below are example input-output pairs from the dataset:\n",
+            "任务：给定输入，生成对应的期望输出。\n",
+            "以下是数据集中的示例输入-输出对：\n",
         ]
-        for i, item in enumerate(dataset[:3]):
+        # P2-2 修复：旧实现用 dataset[:3]，本项目数据集前 3 条全是"财经"类，
+        # 导致 LLM 看到的示例只覆盖 1 个类别。现按 target 分组轮询采样，
+        # 覆盖尽量多的类别。
+        from collections import OrderedDict
+
+        groups: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict()
+        for item in dataset:
+            tgt = str(item.get("target", item.get("answer", "")))
+            groups.setdefault(tgt, []).append(item)
+
+        sampled: List[Dict[str, Any]] = []
+        for tgt, items in groups.items():
+            if items:
+                sampled.append(items[0])
+            if len(sampled) >= 6:
+                break
+
+        for i, item in enumerate(sampled):
             inp = item.get("input", item.get("question", ""))
             tgt = item.get("target", item.get("answer", ""))
-            desc_parts.append(f"  Example {i + 1}:\n")
-            desc_parts.append(f"    Input: {inp}\n")
-            desc_parts.append(f"    Output: {tgt}\n")
+            desc_parts.append(f"  示例 {i + 1}:\n")
+            desc_parts.append(f"    输入: {inp}\n")
+            desc_parts.append(f"    输出: {tgt}\n")
         return "".join(desc_parts)
 
     def _build_meta_prompt(
@@ -298,23 +315,23 @@ class OPROOptimizer(BaseOptimizer):
         # 旧实现用 [-20:] 取的是分数最低的 20 条，与注释意图相反。
         recent_history = sorted_history[:20]
 
-        parts.append("Here are the prompts tried so far and their scores:\n\n")
+        parts.append("以下是已尝试过的 Prompt 及其得分：\n\n")
         for i, (prompt_text, score) in enumerate(recent_history):
-            parts.append(f"```\nScore: {score:.4f}\nPrompt: {prompt_text}\n```\n\n")
+            parts.append(f"```\n得分: {score:.4f}\nPrompt: {prompt_text}\n```\n\n")
 
         # 5. 生成指令
         parts.append(
-            f"Based on the above, generate {self._num_candidates} NEW and IMPROVED prompts.\n"
+            f"基于以上信息，生成 {self._num_candidates} 条新的、更优的 Prompt。\n"
         )
         if recent_history:
             best_score = recent_history[0][1]
             parts.append(
-                f"Each prompt should be different and aim to score higher than {best_score:.4f}.\n"
+                f"每条 Prompt 应有差异，并力求得分高于 {best_score:.4f}。\n"
             )
         parts.append(
-            f"Output each candidate wrapped in triple backticks: ```<prompt>```\n"
+            f"每条候选用三反引号包裹：```<prompt>```\n"
         )
-        parts.append(f"Number them 1 to {self._num_candidates}.\n")
+        parts.append(f"编号 1 到 {self._num_candidates}。\n")
 
         return "".join(parts)
 
@@ -363,21 +380,19 @@ class OPROOptimizer(BaseOptimizer):
                         )
                     )
 
-        # 如果解析出的候选不足，用含 {input} 占位符的安全模板填充。
-        # padding 不依赖 initial_prompt（_generate_candidates 签名里没有它），
-        # 但必须保证占位符存在，否则评估走兜底拼接路径，效果被污染。
-        # 变体标记放在 instruction 之前，避免破坏末尾输出引导。
+        # P2-3 修复：padding 不再加 [OPRO iteration n fill m] 前缀，
+        # 改用含 {input} 占位符且带输出格式约束的中文模板，避免破坏评估链路。
+        # 旧 padding 是英文通用模板，无类别列表、无中文、无格式约束，得分很低。
         _padding_template = (
-            "You are a helpful assistant. Read the input carefully and "
-            "respond with the expected output only.\n\n"
-            "Input: {input}\n"
-            "Output:"
+            "你是一个有用的助手。请根据输入给出对应的输出，只输出结果本身。\n\n"
+            "输入：{input}\n"
+            "输出："
         )
         while len(candidates) < self._num_candidates:
             candidates.append(
                 PromptCandidate(
                     id=str(uuid.uuid4()),
-                    instruction=f"[OPRO iteration {iteration} fill {len(candidates) + 1}]\n{_padding_template}",
+                    instruction=_padding_template,
                     metadata={"source": "opro_padding", "iteration": iteration},
                 )
             )

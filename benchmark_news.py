@@ -336,6 +336,51 @@ async def run_optimizer(
     )
 
 
+async def select_best_on_holdout(
+    provider: LiteLLMProvider,
+    candidates: list,
+    holdout_data: list[dict[str, Any]],
+    concurrency: int = 5,
+    top_k: int = 5,
+) -> tuple[str, float]:
+    """P1-2 修复：在 hold-out 验证集上重新评估 top-k 候选 prompt，选出最优。
+
+    优化器内部在 train_data_fit 上搜索，报告的 best_prompt 可能过拟合 train。
+    这里取 train 得分最高的 top_k 个候选，在独立的 hold-out 上重新评测，
+    选 hold-out 得分最高者作为最终 best_prompt，降低过拟合风险。
+
+    返回 (best_instruction, holdout_score)。
+    """
+    if not holdout_data or not candidates:
+        # 无 hold-out 时退化为优化器报告的 best
+        best = max(candidates, key=lambda c: c.score or 0.0) if candidates else None
+        return (best.instruction if best else "", best.score if best else 0.0)
+
+    # 按 train 得分取 top_k
+    sorted_cands = sorted(candidates, key=lambda c: c.score or 0.0, reverse=True)
+    top_candidates = sorted_cands[:top_k]
+
+    print(f"   🔬 在 hold-out ({len(holdout_data)} 条) 上重新评估 top-{len(top_candidates)} 候选...")
+    best_instruction = ""
+    best_holdout_score = -1.0
+    for i, cand in enumerate(top_candidates):
+        score = await evaluate_prompt(
+            provider,
+            cand.instruction,
+            holdout_data,
+            concurrency=concurrency,
+            log_file=None,
+            checkpoint_file=None,
+            method_name=f"_holdout_{i}",
+        )
+        print(f"      候选 {i + 1}: train={cand.score:.4f} → holdout={score:.4f}")
+        if score > best_holdout_score:
+            best_holdout_score = score
+            best_instruction = cand.instruction
+
+    return best_instruction, best_holdout_score
+
+
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -359,8 +404,15 @@ async def main() -> None:
     parser.add_argument("--max-iters", type=int, default=3, help="每个优化器最大迭代轮数")
     parser.add_argument("--num-candidates", type=int, default=8, help="每轮候选 prompt 数")
     parser.add_argument("--skip-baseline", action="store_true", help="跳过 baseline 评测")
-    parser.add_argument("--train-samples", type=int, default=200, help="训练时使用的数据条数（默认 0 = 全部，分层采样保持类别分布）")
+    parser.add_argument("--train-samples", type=int, default=400, help="训练时使用的数据条数（默认 400，用 0 表示全部，分层采样保持类别分布）。P1-2 修复：旧默认 200 样本过小导致选择偏差，现提升到 400 降低噪声")
     parser.add_argument("--eval-samples", type=int, default=100, help="评测时使用的数据条数（默认 100，用 0 表示全部，分层采样保持类别分布）")
+    parser.add_argument(
+        "--holdout-ratio",
+        type=float,
+        default=0.2,
+        help="从训练集中切出 hold-out 验证集的比例（默认 0.2）。P1-2 修复：优化器在 train 子集上搜索，"
+        "在 hold-out 上选最优 prompt，再在 test 上报最终分，避免 train 选最优→test 暴露过拟合。设 0 禁用。",
+    )
     parser.add_argument("--concurrency", type=int, default=5, help="并发请求数（默认 5，设 1 为完全串行）")
     parser.add_argument(
         "--disable-thinking",
@@ -404,6 +456,33 @@ async def main() -> None:
     eval_n = args.eval_samples if args.eval_samples and args.eval_samples > 0 else full_test_count
     train_data = stratified_sample(full_train_data, min(train_n, full_train_count))
     test_data = stratified_sample(full_test_data, min(eval_n, full_test_count))
+
+    # P1-2 修复：从训练集切出 hold-out 验证集。
+    # 优化器在 train_data_fit（80%）上搜索候选，在 holdout（20%）上选最优 prompt，
+    # 再在 test_data 上报最终分。避免「train 选最优 → test 暴露过拟合」。
+    holdout_data: list[dict[str, Any]] = []
+    train_data_fit: list[dict[str, Any]] = train_data
+    if args.holdout_ratio and 0 < args.holdout_ratio < 1 and len(train_data) >= 20:
+        import random as _rnd
+        _rng = _rnd.Random(42)
+        # 分层切分：按 target 分组，每组按比例切 hold-out
+        from collections import defaultdict as _dd
+        _groups: dict[str, list[dict[str, Any]]] = _dd(list)
+        for item in train_data:
+            _groups[str(item["target"])].append(item)
+        train_data_fit = []
+        holdout_data = []
+        for cat, items in _groups.items():
+            _rng.shuffle(items)
+            n_holdout = max(1, int(len(items) * args.holdout_ratio)) if len(items) >= 5 else 0
+            holdout_data.extend(items[:n_holdout])
+            train_data_fit.extend(items[n_holdout:])
+        _rng.shuffle(train_data_fit)
+        _rng.shuffle(holdout_data)
+        print(
+            f"   🔬 hold-out 验证集: {len(holdout_data)} 条（用于选最优 prompt），"
+            f"训练拟合集: {len(train_data_fit)} 条（用于优化器搜索）"
+        )
 
     print(f"   训练集: {len(train_data)} 条（共 {full_train_count} 条）")
     print(f"   评测集: {len(test_data)} 条（共 {full_test_count} 条）")
@@ -499,15 +578,30 @@ async def main() -> None:
                 method=method,
                 provider=provider,
                 initial_prompt=INITIAL_PROMPT,
-                train_data=train_data,
+                train_data=train_data_fit,  # P1-2 修复：用拟合集训练（不含 hold-out）
                 max_iterations=args.max_iters,
                 num_candidates=args.num_candidates,
             )
             train_score = result.best_prompt.score if result.best_prompt else 0.0
-            best_instruction = result.best_prompt.instruction if result.best_prompt else INITIAL_PROMPT
-            print(f"   ✅ 优化器报告得分 (train): {train_score:.4f}")
+            optimizer_best_instruction = result.best_prompt.instruction if result.best_prompt else INITIAL_PROMPT
+            print(f"   ✅ 优化器报告得分 (train_fit): {train_score:.4f}")
             print(f"   耗时: {time.time() - t0:.1f}s")
-            print(f"   最优 Prompt: {best_instruction[:100]}...")
+            print(f"   优化器最优 Prompt: {optimizer_best_instruction[:100]}...")
+
+            # P1-2 修复：在 hold-out 上重新评估 top-k 候选，选 hold-out 最优作为最终 best
+            if holdout_data and result.all_candidates:
+                best_instruction, holdout_score = await select_best_on_holdout(
+                    provider,
+                    result.all_candidates,
+                    holdout_data,
+                    concurrency=args.concurrency,
+                    top_k=5,
+                )
+                print(f"   🔬 hold-out 最优得分: {holdout_score:.4f}")
+                if not best_instruction:
+                    best_instruction = optimizer_best_instruction
+            else:
+                best_instruction = optimizer_best_instruction
 
             # —— 关键：用 best_prompt 在测试集上评测，与 baseline 同口径 ——
             # 优化器报告的 train_score 是训练集得分，与 baseline 的测试集准确率不可比。

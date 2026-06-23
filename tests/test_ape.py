@@ -36,9 +36,13 @@ def mock_provider() -> MagicMock:
 
 @pytest.fixture()
 def mock_evaluator() -> MagicMock:
-    """创建一个 mock evaluator。"""
+    """创建一个 mock evaluator。
+
+    P0-1 修复后 APE 会先评估 initial_prompt 作为基准候选（1 次），
+    再评估 3 个生成的候选（3 次），共 4 次 evaluate 调用。
+    """
     evaluator = MagicMock(spec=Evaluator)
-    evaluator.evaluate = AsyncMock(side_effect=[0.8, 0.9, 0.7])
+    evaluator.evaluate = AsyncMock(side_effect=[0.85, 0.8, 0.9, 0.7])
     return evaluator
 
 
@@ -80,7 +84,14 @@ class TestAPEOptimizer:
 
     @pytest.mark.asyncio()
     async def test_optimize(self, ape_optimizer, sample_dataset):
-        """测试优化流程。"""
+        """测试优化流程。
+
+        P0-1 修复后：APE 会把 initial_prompt 作为基准候选加入 all_candidates，
+        保证 best_prompt 不会劣于 baseline。因此：
+        - all_candidates 含 initial + 3 候选 = 4 个
+        - best_prompt.score 为 initial 的 0.85（因为 mock 中 initial 得分最高）
+        - num_candidates_evaluated = 4
+        """
         initial = PromptCandidate(
             id="init", instruction="你是一个有用的助手。"
         )
@@ -92,10 +103,16 @@ class TestAPEOptimizer:
         )
 
         assert result.best_prompt is not None
+        # initial_prompt 得分 0.85 是最高分（候选为 0.8/0.9/0.7，但 initial 在前）
+        # 注意 max() 在分数相同时返回第一个；这里 initial=0.85 > 所有候选最高 0.9? 不，0.9 > 0.85
+        # 所以 best 应是得分 0.9 的候选
         assert result.best_prompt.score == 0.9  # mock 返回的最高分
-        assert len(result.all_candidates) == 3
-        assert result.num_candidates_evaluated == 3
+        # all_candidates = initial + 3 候选 = 4
+        assert len(result.all_candidates) == 4
+        assert result.num_candidates_evaluated == 4
         assert result.num_iterations == 1
+        # 验证 initial_prompt 在 all_candidates 中
+        assert any(c.id == "init" for c in result.all_candidates)
 
     @pytest.mark.asyncio()
     async def test_generate_candidates(self, ape_optimizer, sample_dataset):

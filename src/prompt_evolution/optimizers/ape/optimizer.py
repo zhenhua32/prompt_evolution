@@ -43,22 +43,28 @@ class APEOptimizer(BaseOptimizer):
     ) -> None:
         super().__init__(model_provider=model_provider, evaluator=evaluator, config=config)
         self._num_candidates: int = self.config.get("num_candidates", 10)
-        self._num_iterations: int = self.config.get("num_iterations", 1)
+        # P2-1 修复：默认迭代轮数从 1 改为 3，扩大搜索空间
+        self._num_iterations: int = self.config.get("num_iterations", 3)
         self._generation_temperature: float = self.config.get("generation_temperature", 1.0)
         self._prompt_gen_system: str = self.config.get(
             "prompt_gen_system",
-            "You are a helpful prompt engineer. "
-            "Your task is to write the BEST possible instruction prompt "
-            "for the given task. Make it clear, specific, and effective.",
+            # P0-2 / P1-1 修复：中文化 + 强制保留输出格式约束
+            "你是一位资深 Prompt 工程师。你的任务是针对给定任务，"
+            "撰写最清晰、最具体、最有效的指令 Prompt。",
         )
-        # 约束 LLM 在改写 prompt 时保留 {input} 占位符（评估时用于替换实际输入）
+        # P0-2 修复：约束 LLM 保留 {input} 占位符 + 原始输出格式约束 + 末尾输出引导
         self._placeholder_constraint: str = self.config.get(
             "placeholder_constraint",
-            "IMPORTANT: The prompt MUST contain the literal placeholder {input} "
-            "exactly once — this placeholder will be replaced with the actual "
-            "user input at evaluation time. Do NOT remove or rename it. "
-            "Position it where the user's input should go "
-            "(e.g. after 'Input:' or at the end of the prompt).",
+            "重要约束（必须遵守）：\n"
+            "1. 新 Prompt 必须原样保留字面占位符 {input}（仅出现一次），"
+            "用于评估时替换为实际用户输入，不得删除、改名或重复。\n"
+            "2. 必须原样保留原 Prompt 中的输出格式约束"
+            "（如「只输出类别名称，不要输出任何其他内容」），"
+            "不得改变输出格式。\n"
+            "3. 必须保留原 Prompt 末尾的输出引导"
+            "（如「类别：」「答案：」），不得改写或删除。\n"
+            "4. 不得添加「请逐步分析」「step by step」等推理引导，"
+            "输出必须是裸答案，不带任何前缀或解释。",
         )
 
     # ------------------------------------------------------------------
@@ -85,6 +91,19 @@ class APEOptimizer(BaseOptimizer):
         cost_before: float = getattr(self.model_provider, "total_cost_usd", 0.0)
         all_candidates: List[PromptCandidate] = []
         history: List[Dict[str, Any]] = []
+
+        # P0-1 修复：评估初始 prompt 作为基准候选，保证 best_prompt 不会劣于 baseline。
+        # 旧实现 all_candidates 从不含 initial_prompt，导致 APE 机制性必然返回新生成的
+        # 候选（即使全部都比初始 prompt 差），是 APE 劣化最严重的根因。
+        logger.info("APE: evaluating initial prompt as baseline candidate...")
+        initial_score = await self.evaluator.evaluate(
+            prompt=initial_prompt,
+            dataset=dataset,
+            model_provider=self.model_provider,
+        )
+        initial_prompt.score = initial_score
+        all_candidates.append(initial_prompt)
+        logger.info("APE initial prompt score: {:.4f}", initial_score)
 
         num_iterations = min(max_iterations, self._num_iterations)
         logger.info(
@@ -165,12 +184,9 @@ class APEOptimizer(BaseOptimizer):
         iteration: int,
     ) -> List[PromptCandidate]:
         """用 LLM 生成 ``num_candidates`` 个候选 prompt。"""
-        # 构造生成候选的 prompt
-        dataset_sample = ""
-        for i, item in enumerate(dataset[:3]):  # 只用前 3 条作为示例
-            inp = item.get("input", item.get("question", ""))
-            tgt = item.get("target", item.get("answer", ""))
-            dataset_sample += f"输入：{inp}\n期望输出：{tgt}\n\n"
+        # P2-2 修复：示例采样改为分层覆盖多类别，避免旧实现 dataset[:3] 前 3 条全同类
+        # （本项目数据集前 3 条全是"财经"），导致 LLM 生成的 prompt 偏科、泛化性差。
+        dataset_sample = self._build_diverse_sample(dataset, max_samples=6)
 
         generation_prompt = (
             f"{self._prompt_gen_system}\n\n"
@@ -217,15 +233,49 @@ class APEOptimizer(BaseOptimizer):
                     )
                 )
 
-        # 如果解析出的候选不足，用初始 prompt 填充。
-        # 变体标记放在 instruction 之前，避免破坏末尾的输出引导（如 "\n类别："）。
+        # P2-3 修复：padding 不再加前缀标记，直接复用 initial_prompt.instruction。
+        # 旧实现加 [variant n] 前缀会改变 prompt 开头（"你是一个新闻分类专家" →
+        # "[variant 3]\n你是一个..."），干扰模型角色认知。
         while len(candidates) < self._num_candidates:
             candidates.append(
                 PromptCandidate(
                     id=str(uuid.uuid4()),
-                    instruction=f"[variant {len(candidates) + 1}]\n{initial_prompt.instruction}",
+                    instruction=initial_prompt.instruction,
                     metadata={"source": "ape_padding", "iteration": iteration},
                 )
             )
 
         return candidates[: self._num_candidates]
+
+    @staticmethod
+    def _build_diverse_sample(
+        dataset: List[Dict[str, Any]], max_samples: int = 6
+    ) -> str:
+        """构造覆盖多类别的示例文本（P2-2 修复）。
+
+        旧实现用 ``dataset[:3]``，本项目数据集前 3 条全是"财经"类，
+        LLM 看到的示例只覆盖 14 类中的 1 类，生成的 prompt 容易偏科。
+        现按 target 分组，每个类别抽 1 条，最多 max_samples 条，
+        保证示例覆盖尽量多的类别。
+        """
+        from collections import defaultdict, OrderedDict
+
+        groups: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict()
+        for item in dataset:
+            tgt = str(item.get("target", item.get("answer", "")))
+            groups.setdefault(tgt, []).append(item)
+
+        sampled: List[Dict[str, Any]] = []
+        # 轮询各类别各取 1 条，直到达到 max_samples
+        for tgt, items in groups.items():
+            if items:
+                sampled.append(items[0])
+            if len(sampled) >= max_samples:
+                break
+
+        lines: List[str] = []
+        for i, item in enumerate(sampled):
+            inp = item.get("input", item.get("question", ""))
+            tgt = item.get("target", item.get("answer", ""))
+            lines.append(f"输入：{inp}\n期望输出：{tgt}\n")
+        return "\n".join(lines)

@@ -29,50 +29,45 @@ from prompt_evolution.core.models import OptimizationResult, PromptCandidate
 
 
 # 语义改写 system prompt（核心算子）
-_SEMANTIC_REWRITE_SYSTEM = """\
-You are a semantic prompt rewriter.
-
-Your task: Rewrite the given prompt from a NEW semantic angle
-while PRESERVING its original intent.
-
-Semantic angles to try (pick one per rewrite):
-1. Change the persona (e.g. "You are a..." → different expert role)
-2. Change the reasoning strategy (e.g. add/remove "think step by step")
-3. Change the output format specification
-4. Change the level of detail (more/fewer constraints)
-5. Change the examples or framing
-
-CRITICAL CONSTRAINTS:
-- The rewritten prompt MUST still produce CORRECT outputs for the same task — only the wording/angle changes.
-- The rewritten prompt MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it. Keep it where the user's input should go (typically near the end, before the output cue).
-
-Output ONLY the rewritten prompt, wrapped in triple backticks:
-```
-<rewritten prompt>
-```
-"""
+# P0-2 / P1-1 / P1-3 修复：中文化 + 弱化对输出格式的破坏 + 强制保留格式约束
+_SEMANTIC_REWRITE_SYSTEM = (
+    '你是一个语义 Prompt 改写器。\n\n'
+    '你的任务：从新的语义角度改写给定 Prompt，同时保留其原始意图。\n\n'
+    '可尝试的语义角度（每次改写选一个）：\n'
+    '1. 改变角色（如"你是..." → 不同的专家身份）\n'
+    '2. 改变推理策略（如增减约束、调整结构）\n'
+    '3. 改变细节层级（更多/更少约束）\n'
+    '4. 改变示例或框架\n'
+    '（注意：不得改变输出格式，不得添加"请逐步分析"等推理引导）\n\n'
+    '重要约束（必须遵守）：\n'
+    '- 改写后的 Prompt 必须能为同一任务产生正确的输出——仅措辞/角度变化\n'
+    '- 改写后的 Prompt 必须原样保留字面占位符 {input}（仅一次），评估时会替换为实际用户输入，不得删除、改名或重复\n'
+    '- 必须原样保留原 Prompt 的输出格式约束（如「只输出类别名称」）和末尾输出引导（如「类别：」）\n'
+    '- 不得改变输出格式，不得添加「请逐步分析」「step by step」等推理引导\n\n'
+    '只输出改写后的 Prompt，用三反引号包裹：\n'
+    '```\n'
+    '<改写后的 prompt>\n'
+    '```\n'
+)
 
 # 搜索引导 system prompt（用高分 prompt 引导下一轮搜索）
-_GUIDED_SEARCH_SYSTEM = """\
-You are a prompt optimization researcher.
-
-You are given:
-- The current best prompt (highest score so far)
-- Its score (0.0 = worst, 1.0 = perfect)
-
-Your job: Propose NEW prompts that are semantically related to
-the best prompt but explore a slightly DIFFERENT angle.
-
-The goal: find prompts in the "semantic neighborhood" of the best
-prompt that might score even higher.
-
-CRITICAL: Every candidate MUST contain the literal placeholder {input} exactly once. This placeholder is replaced with the actual user input at evaluation time. Do NOT remove, rename, or duplicate it.
-
-Output each candidate wrapped in triple backticks:
-```
-<candidate prompt>
-```
-"""
+# P0-2 / P1-1 修复：中文化 + 强制保留格式约束
+_GUIDED_SEARCH_SYSTEM = (
+    '你是一位 Prompt 优化研究员。\n\n'
+    '你将获得：\n'
+    '- 当前最优 Prompt（迄今最高分）\n'
+    '- 其得分（0.0 = 最差，1.0 = 完美）\n\n'
+    '你的任务：提出与最优 Prompt 语义相关但探索稍微不同角度的新 Prompt。\n'
+    '目标：在最优 Prompt 的"语义邻域"中找到可能得分更高的 Prompt。\n\n'
+    '重要约束（必须遵守）：\n'
+    '- 每条候选必须原样保留字面占位符 {input}（仅一次），评估时会替换为实际用户输入，不得删除、改名或重复\n'
+    '- 必须原样保留原 Prompt 的输出格式约束（如「只输出类别名称」）和末尾输出引导（如「类别：」）\n'
+    '- 不得改变输出格式，不得添加「请逐步分析」「step by step」等推理引导\n\n'
+    '每条候选用三反引号包裹：\n'
+    '```\n'
+    '<候选 prompt>\n'
+    '```\n'
+)
 
 
 class SPOOptimizer(BaseOptimizer):
@@ -290,20 +285,20 @@ class SPOOptimizer(BaseOptimizer):
         import re
 
         angle_names = [
-            "change persona (expert role)",
-            "change reasoning strategy (step-by-step, etc.)",
-            "change output format specification",
-            "change level of detail (constraints)",
-            "change examples or framing",
+            "改变角色（专家身份）",
+            "改变推理策略（增减约束、调整结构）",
+            "改变细节层级（更多/更少约束）",
+            "改变示例或框架",
+            "改变措辞风格",
         ]
         angle_name = angle_names[angle % len(angle_names)]
 
         prompt_text = (
-            f"Current best prompt:\n```\n{prompt.instruction}\n```\n\n"
-            f"Semantic angle for this rewrite: **{angle_name}**\n\n"
-            f"Generate {self._num_candidates // self._num_angles + 1} "
-            f"semantically rewritten variants. "
-            f"Wrap each in triple backticks."
+            f"当前最优 Prompt:\n```\n{prompt.instruction}\n```\n\n"
+            f"本次改写的语义角度：**{angle_name}**\n\n"
+            f"生成 {self._num_candidates // self._num_angles + 1} "
+            f"个语义改写变体。"
+            f"每个用三反引号包裹。"
         )
 
         response = await self.model_provider.generate(
@@ -333,14 +328,14 @@ class SPOOptimizer(BaseOptimizer):
                         )
                     )
 
-        # 兜底：解析失败时返回原 prompt 的变体。
-        # 变体标记放在 instruction 之前，避免破坏末尾输出引导（如 "\n类别："）。
+        # P2-3 修复：兜底不加 [semantic angle...] 前缀，直接复用 prompt.instruction，
+        # 避免前缀污染破坏 prompt 开头的角色认知。
         if not candidates:
             for i in range(self._num_candidates // self._num_angles + 1):
                 candidates.append(
                     PromptCandidate(
                         id=str(uuid.uuid4()),
-                        instruction=f"[semantic angle {angle}, var {i}]\n{prompt.instruction}",
+                        instruction=prompt.instruction,
                         metadata={
                             "source": "spo_rewrite_fallback",
                             "angle": angle,
@@ -360,10 +355,10 @@ class SPOOptimizer(BaseOptimizer):
         import re
 
         prompt_text = (
-            f"Current best prompt (score reference):\n```\n{best_prompt.instruction}\n```\n\n"
-            f"Generate {self._num_candidates // 3 + 1} NEW prompts "
-            f"in the semantic neighborhood of the above best prompt.\n"
-            f"Each should explore a slightly different angle but stay related."
+            f"当前最优 Prompt（得分参考）:\n```\n{best_prompt.instruction}\n```\n\n"
+            f"生成 {self._num_candidates // 3 + 1} 个新 Prompt，"
+            f"位于上述最优 Prompt 的语义邻域内。\n"
+            f"每个应探索稍微不同的角度但保持相关。"
         )
 
         response = await self.model_provider.generate(
